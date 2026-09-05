@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.core.config import settings
 from app.core.database import Base
+from app.domains.applications import models as application_models  # noqa: F401
 from app.domains.auth import models  # noqa: F401  (registers User with Base.metadata)
 from app.domains.company_addresses import models as company_address_models  # noqa: F401
 from app.domains.job_posts import models as job_post_models  # noqa: F401
