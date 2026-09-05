@@ -16,5 +16,7 @@ class Settings(BaseSettings):
     minio_bucket: str
     minio_secure: bool = False
 
+    redis_url: str
+
 
 settings = Settings()

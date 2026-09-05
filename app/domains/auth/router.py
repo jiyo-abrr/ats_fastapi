@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from pydantic import EmailStr
 
+from app.core.rate_limit import rate_limit
 from app.domains.auth.dependencies import get_auth_service, get_current_user
 from app.domains.auth.models import User
 from app.domains.auth.schemas import (
@@ -16,14 +18,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post(
-    "/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED
+    "/signup",
+    response_model=SignupResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("signup", limit=5, window_seconds=60))],
 )
 async def signup(
     first_name: str = Form(...),
     middle_initial: str | None = Form(None),
     last_name: str = Form(...),
     contact_number: str = Form(...),
-    email: str = Form(...),
+    email: EmailStr = Form(...),
     password: str = Form(...),
     resume: UploadFile = File(...),
     auth_service: AuthService = Depends(get_auth_service),
@@ -39,7 +44,11 @@ async def signup(
     )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit("login", limit=5, window_seconds=60))],
+)
 def login(
     payload: LoginRequest, auth_service: AuthService = Depends(get_auth_service)
 ) -> TokenResponse:
