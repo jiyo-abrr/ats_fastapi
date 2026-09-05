@@ -1,10 +1,12 @@
 import os
 import sys
+import uuid
 from getpass import getpass
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
-from app.domains.auth.models import User
+from app.domains.auth import entities
+from app.domains.auth.repository import UserRepository
 from app.domains.rbac.repository import RoleRepository
 
 
@@ -17,7 +19,9 @@ def main() -> None:
 
     db = SessionLocal()
     try:
-        if db.query(User).filter(User.email == email).first() is not None:
+        users = UserRepository(db)
+
+        if users.get_by_email(email) is not None:
             print(f"A user with email '{email}' already exists.", file=sys.stderr)
             sys.exit(1)
 
@@ -28,19 +32,23 @@ def main() -> None:
             )
             sys.exit(1)
 
-        user = User(
-            first_name=first_name,
-            middle_initial=None,
-            last_name=last_name,
-            contact_number=contact_number,
-            email=email,
-            password_hash=hash_password(password),
-            role_id=admin_role.id,
-            resume_object_key=None,
+        user_id = uuid.uuid4()
+        users.add(
+            entities.User(
+                id=user_id,
+                first_name=first_name,
+                middle_initial=None,
+                last_name=last_name,
+                contact_number=contact_number,
+                email=email,
+                password_hash=hash_password(password),
+                role_id=admin_role.id,
+                role=admin_role.name,
+                resume_object_key=None,
+            )
         )
-        db.add(user)
         db.commit()
-        db.refresh(user)
+        user = users.get_by_id(user_id)
         print(f"Created admin user {user.email} (id={user.id})")
     finally:
         db.close()

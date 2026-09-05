@@ -1,23 +1,20 @@
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.core.unit_of_work import UnitOfWork, get_unit_of_work
-from app.domains.auth.models import User
+from app.domains.auth import entities
+from app.domains.auth.exceptions import InvalidAccessTokenError
 from app.domains.auth.repository import RevokedRefreshTokenRepository, UserRepository
 from app.domains.auth.service import AuthService
 from app.domains.rbac.repository import RoleRepository
 
 _bearer_scheme = HTTPBearer()
 
-_CREDENTIALS_ERROR = HTTPException(
-    status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="Could not validate credentials",
-    headers={"WWW-Authenticate": "Bearer"},
-)
+_CREDENTIALS_ERROR_MESSAGE = "Could not validate credentials"
 
 
 def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
@@ -50,13 +47,13 @@ def get_auth_service(
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     users: UserRepository = Depends(get_user_repository),
-) -> User:
+) -> entities.User:
     try:
         token = decode_token(credentials.credentials, expected_type="access")
     except jwt.InvalidTokenError as exc:
-        raise _CREDENTIALS_ERROR from exc
+        raise InvalidAccessTokenError(_CREDENTIALS_ERROR_MESSAGE) from exc
 
     user = users.get_by_id(token.user_id)
     if user is None:
-        raise _CREDENTIALS_ERROR
+        raise InvalidAccessTokenError(_CREDENTIALS_ERROR_MESSAGE)
     return user

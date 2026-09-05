@@ -1,5 +1,3 @@
-from typing import Any
-
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
@@ -18,9 +16,6 @@ class UnitOfWork:
 
     def rollback(self) -> None:
         self.db.rollback()
-
-    def refresh(self, obj: Any) -> None:
-        self.db.refresh(obj)
 
 
 def get_unit_of_work(db: Session = Depends(get_db)) -> UnitOfWork:

@@ -1,12 +1,13 @@
 from collections.abc import Callable, Coroutine
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.unit_of_work import UnitOfWork, get_unit_of_work
+from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
-from app.domains.auth.models import User
+from app.domains.rbac.exceptions import PermissionDeniedError
 from app.domains.rbac.repository import (
     PermissionRepository,
     RolePermissionRepository,
@@ -44,15 +45,14 @@ def require_permission(
     permission_key: str,
 ) -> Callable[..., Coroutine[None, None, None]]:
     async def dependency(
-        current_user: User = Depends(get_current_user),
+        current_user: auth_entities.User = Depends(get_current_user),
         role_permissions: RolePermissionRepository = Depends(
             get_role_permission_repository
         ),
     ) -> None:
         if not role_permissions.has_permission(current_user.role_id, permission_key):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to perform this action",
+            raise PermissionDeniedError(
+                "You do not have permission to perform this action"
             )
 
     return dependency

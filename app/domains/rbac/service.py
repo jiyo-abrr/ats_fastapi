@@ -1,6 +1,5 @@
-from fastapi import HTTPException, status
-
 from app.core.unit_of_work import UnitOfWork
+from app.domains.rbac.exceptions import PermissionNotFoundError, RoleNotFoundError
 from app.domains.rbac.repository import (
     PermissionRepository,
     RolePermissionRepository,
@@ -52,14 +51,8 @@ class RBACService:
     def _resolve(self, role_name: str, permission_key: str):
         role = self.roles.get_by_name(role_name)
         if role is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Role '{role_name}' not found",
-            )
+            raise RoleNotFoundError(f"Role '{role_name}' not found")
         permission = self.permissions.get_by_key(permission_key)
         if permission is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Permission '{permission_key}' not found",
-            )
+            raise PermissionNotFoundError(f"Permission '{permission_key}' not found")
         return role, permission

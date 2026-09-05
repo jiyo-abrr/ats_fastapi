@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import EmailStr
 
 from app.core.rate_limit import rate_limit
+from app.domains.auth import entities
 from app.domains.auth.dependencies import get_auth_service, get_current_user
-from app.domains.auth.models import User
 from app.domains.auth.schemas import (
     AccessTokenResponse,
     CreateHrAccountRequest,
@@ -35,14 +35,17 @@ async def signup(
     resume: UploadFile = File(...),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SignupResponse:
-    return await auth_service.signup(
+    resume_bytes = await resume.read()
+    return auth_service.signup(
         first_name=first_name,
         middle_initial=middle_initial,
         last_name=last_name,
         contact_number=contact_number,
         email=email,
         password=password,
-        resume=resume,
+        resume_filename=resume.filename or "resume",
+        resume_content_type=resume.content_type,
+        resume_bytes=resume_bytes,
     )
 
 
@@ -92,5 +95,5 @@ def logout(
 
 
 @router.get("/me", response_model=UserOut)
-def me(current_user: User = Depends(get_current_user)) -> UserOut:
+def me(current_user: entities.User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)
