@@ -4,6 +4,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr
 
 
+class RoleSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -13,11 +19,21 @@ class UserOut(BaseModel):
     last_name: str
     contact_number: str
     email: EmailStr
+    role: RoleSummary
     created_at: datetime
     updated_at: datetime
 
 
 class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class CreateHrAccountRequest(BaseModel):
+    first_name: str
+    middle_initial: str | None = None
+    last_name: str
+    contact_number: str
     email: EmailStr
     password: str
 

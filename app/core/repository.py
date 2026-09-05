@@ -17,6 +17,9 @@ class BaseRepository(Generic[ModelType, IdType]):
     def get_by_id(self, id: IdType) -> ModelType | None:
         return self.db.get(self.model, id)
 
+    def list_all(self) -> list[ModelType]:
+        return self.db.query(self.model).all()
+
     def add(self, obj: ModelType) -> None:
         self.db.add(obj)
 

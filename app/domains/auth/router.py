@@ -6,6 +6,7 @@ from app.domains.auth.dependencies import get_auth_service, get_current_user
 from app.domains.auth.models import User
 from app.domains.auth.schemas import (
     AccessTokenResponse,
+    CreateHrAccountRequest,
     LoginRequest,
     RefreshRequest,
     SignupResponse,
@@ -13,6 +14,7 @@ from app.domains.auth.schemas import (
     UserOut,
 )
 from app.domains.auth.service import AuthService
+from app.domains.rbac.dependencies import require_permission
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -41,6 +43,26 @@ async def signup(
         email=email,
         password=password,
         resume=resume,
+    )
+
+
+@router.post(
+    "/hr-accounts",
+    response_model=UserOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("manage_hr_accounts"))],
+)
+def create_hr_account(
+    payload: CreateHrAccountRequest,
+    auth_service: AuthService = Depends(get_auth_service),
+) -> UserOut:
+    return auth_service.create_hr_account(
+        first_name=payload.first_name,
+        middle_initial=payload.middle_initial,
+        last_name=payload.last_name,
+        contact_number=payload.contact_number,
+        email=payload.email,
+        password=payload.password,
     )
 
 

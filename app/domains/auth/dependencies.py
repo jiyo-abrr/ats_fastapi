@@ -9,6 +9,7 @@ from app.core.unit_of_work import UnitOfWork, get_unit_of_work
 from app.domains.auth.models import User
 from app.domains.auth.repository import RevokedRefreshTokenRepository, UserRepository
 from app.domains.auth.service import AuthService
+from app.domains.rbac.repository import RoleRepository
 
 _bearer_scheme = HTTPBearer()
 
@@ -23,6 +24,12 @@ def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
     return UserRepository(db)
 
 
+# Duplicated (not imported from rbac.dependencies) to avoid a circular import:
+# rbac.dependencies imports get_current_user from this module.
+def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
+    return RoleRepository(db)
+
+
 def get_revoked_token_repository(
     db: Session = Depends(get_db),
 ) -> RevokedRefreshTokenRepository:
@@ -31,12 +38,13 @@ def get_revoked_token_repository(
 
 def get_auth_service(
     users: UserRepository = Depends(get_user_repository),
+    roles: RoleRepository = Depends(get_role_repository),
     revoked_tokens: RevokedRefreshTokenRepository = Depends(
         get_revoked_token_repository
     ),
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> AuthService:
-    return AuthService(users, revoked_tokens, uow)
+    return AuthService(users, roles, revoked_tokens, uow)
 
 
 def get_current_user(
