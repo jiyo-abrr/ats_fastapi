@@ -4,76 +4,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.jobs.enums import EmploymentType, JobPostStatus
-
-
-class CompanyAddressCreate(BaseModel):
-    label: str
-    line1: str
-    line2: str | None = None
-    city: str
-    state_province: str | None = None
-    postal_code: str | None = None
-    country: str
-    latitude: Decimal | None = None
-    longitude: Decimal | None = None
-
-
-class CompanyAddressUpdate(CompanyAddressCreate):
-    pass
-
-
-class CompanyAddressOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    label: str
-    line1: str
-    line2: str | None
-    city: str
-    state_province: str | None
-    postal_code: str | None
-    country: str
-    latitude: Decimal | None
-    longitude: Decimal | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PositionCreate(BaseModel):
-    title: str
-    description: str | None = None
-
-
-class PositionUpdate(PositionCreate):
-    pass
-
-
-class PositionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    title: str
-    description: str | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class TagCreate(BaseModel):
-    name: str
-    description: str | None = None
-
-
-class TagUpdate(TagCreate):
-    pass
-
-
-class TagOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    name: str
-    description: str | None
+from app.domains.job_posts.enums import EmploymentType, JobPostStatus
+from app.domains.tags.schemas import TagOut
 
 
 class JobPostCreate(BaseModel):

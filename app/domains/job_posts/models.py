@@ -7,57 +7,9 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.domains.jobs.enums import EmploymentType, JobPostStatus
-
-
-class CompanyAddress(Base):
-    __tablename__ = "company_addresses"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    label: Mapped[str] = mapped_column(String(100), nullable=False)
-    line1: Mapped[str] = mapped_column(String(255), nullable=False)
-    line2: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    city: Mapped[str] = mapped_column(String(100), nullable=False)
-    state_province: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    country: Mapped[str] = mapped_column(String(100), nullable=False)
-    # Reserved for future geolocation-based search — not used by any query yet.
-    latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
-    longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-
-class Position(Base):
-    __tablename__ = "positions"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    title: Mapped[str] = mapped_column(String(150), nullable=False, index=True)
-    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-
-class Tag(Base):
-    __tablename__ = "tags"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+from app.domains.company_addresses.models import CompanyAddress
+from app.domains.job_posts.enums import EmploymentType, JobPostStatus
+from app.domains.positions.models import Position
 
 
 class JobPost(Base):

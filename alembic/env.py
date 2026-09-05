@@ -6,8 +6,11 @@ from alembic import context
 from app.core.config import settings
 from app.core.database import Base
 from app.domains.auth import models  # noqa: F401  (registers User with Base.metadata)
-from app.domains.jobs import models as jobs_models  # noqa: F401
+from app.domains.company_addresses import models as company_address_models  # noqa: F401
+from app.domains.job_posts import models as job_post_models  # noqa: F401
+from app.domains.positions import models as position_models  # noqa: F401
 from app.domains.rbac import models as rbac_models  # noqa: F401
+from app.domains.tags import models as tag_models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

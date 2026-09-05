@@ -36,15 +36,18 @@ app/
       service.py            # RBACService — grant/revoke/list, raises the exceptions above
       dependencies.py      # require_permission(key) — the enforcement mechanism every domain gates on
       router.py             # admin-only endpoints to inspect/reconfigure role_permissions live
-    jobs/
-      models.py            # CompanyAddress, Position, Tag, JobPost, JobPostTag, JobPostExclusion (ORM)
-      entities.py           # CompanyAddress, Position, Tag, JobPost (plain dataclasses)
+    positions/             # Position — CRUD only, no cross-domain dependency
+    tags/                  # Tag — CRUD only, no cross-domain dependency
+    company_addresses/     # CompanyAddress — CRUD only, no cross-domain dependency (lat/long reserved for future geolocation search)
+    job_posts/
+      models.py            # JobPost, JobPostTag, JobPostExclusion (ORM) — imports Position/CompanyAddress models for relationship()
+      entities.py           # JobPost (plain dataclass); imports Tag from tags.entities
       enums.py               # EmploymentType, JobPostStatus (StrEnum — Pydantic validates at the request boundary, no domain exception needed for bad values)
-      exceptions.py         # *NotFoundError per resource, ResourceInUseError (delete blocked by a live FK reference)
-      repository.py         # one BaseRepository subclass per resource; JobPostRepository also owns the job_post_tags/job_post_exclusions join queries + add_tag/remove_tag/add_exclusion/remove_exclusion
-      service.py            # 4 independent service classes (CompanyAddressService/PositionService/TagService/JobPostService) in one file — SRP is per-class, not per-file
-      dependencies.py       # DI factories for all 4 repositories/services
-      router.py             # 4 APIRouters (public GET, manage_jobs-gated write) combined into one exported router
+      exceptions.py         # JobPostNotFoundError only — Position/Tag/CompanyAddress each own their own NotFoundError/InUseError
+      repository.py         # JobPostRepository — owns the job_post_tags/job_post_exclusions join queries + add_tag/remove_tag/add_exclusion/remove_exclusion
+      service.py            # JobPostService — depends on PositionRepository/CompanyAddressRepository/TagRepository from their own domains to validate FKs
+      dependencies.py       # DI factory; wires in the other 3 domains' repository dependencies
+      router.py             # public GET, manage_jobs-gated write
   api/
     v1.py                  # version-specific aggregator: mounts each domain's router under /api/v1 (e.g. auth_router -> /api/v1/auth/*)
     router.py              # top-level aggregator: api_router combines every active version (currently just v1) into one router
@@ -79,13 +82,13 @@ When adding a new domain (e.g. `jobs`, `applications`), mirror this structure un
 
 **MinIO layout**: resumes are stored under the `applicant_resume/` prefix within the `resumes` bucket (`applicant_resume/{user_id}/{uuid4}_{filename}`, built in `AuthService.signup()`), not directly at the bucket root — keeps the bucket organized if other file types get added later (e.g. HR-uploaded documents would get their own prefix, not dumped alongside resumes).
 
-**Jobs domain (`app/domains/jobs/`)**: `CompanyAddress`/`Position`/`Tag` are independent, fully-CRUD'd reference resources; `JobPost` references all three plus a self-referential exclusion list. Design notes specific to this domain:
-- **Public read, gated write.** Every `GET` on `/company-addresses`, `/positions`, `/tags`, `/job-posts` is unauthenticated (job posts are a public listing). Every `POST`/`PUT`/`DELETE` requires the `manage_jobs` permission (seeded, granted to `admin`+`hr` by default — same shape as `manage_hr_accounts`).
+**Job posting domains (`positions/`, `tags/`, `company_addresses/`, `job_posts/`)**: four separate domains, not one bundled domain — `Position`, `Tag`, and `CompanyAddress` are independent, fully-CRUD'd reference resources with zero knowledge of each other or of `JobPost`; `JobPost` is the only one that depends on the other three (one-way, same direction as `auth` → `rbac` — never the reverse). Splitting them was a deliberate correction: they were originally one `jobs` domain (mirroring `rbac`'s multi-model shape), but unlike `Role`+`Permission`+`RolePermission` — which only make sense together — these three have no shared business concept, so bundling them violated single-responsibility at the domain level, not just the class level. Design notes:
+- **Public read, gated write.** Every `GET` on `/company-addresses`, `/positions`, `/tags`, `/job-posts` is unauthenticated (job posts are a public listing). Every `POST`/`PUT`/`DELETE` across all four requires the `manage_jobs` permission (seeded, granted to `admin`+`hr` by default — same shape as `manage_hr_accounts`). One shared permission across four domains is intentional — no need for `manage_positions`/`manage_tags`/etc. unless finer-grained control is actually requested.
 - **`job_post_exclusions` models the relationship only.** A job post can list other job posts it excludes (`excluded_job_post_ids`) — intent: "don't let applicants of job post A apply to job post B." There is no applications/candidacy domain yet, so nothing actually enforces that ban today; this is the data shape that domain will read from once it exists.
-- **Cascade rules are deliberately asymmetric.** Deleting a `JobPost` cascades its own `job_post_tags`/`job_post_exclusions` rows (both sides — as excluder and as excluded) since those rows are owned by the job post. Deleting a `Position`/`CompanyAddress`/`Tag` that's still referenced by a job post does **not** cascade — it hits a live FK, which the service catches (`IntegrityError` → `uow.rollback()` → `ResourceInUseError`, a `ConflictError` → 409) rather than letting it surface as a raw 500.
-- **`BaseRepository.update(entity)` is repo-specific, not generic.** `add(entity)` maps a *new* entity to a transient ORM object and stages an INSERT — reusing it for an update would attempt a duplicate-PK insert. Each of the 4 repositories in this domain implements its own `update(entity)`: fetch the existing session-attached ORM row by id, mutate its columns from the entity, and let SQLAlchemy's unit-of-work detect the diff and emit the UPDATE on commit. `BaseRepository` doesn't provide this generically because not every entity's PK attribute is named `.id` (e.g. `RevokedRefreshToken` uses `.jti`).
+- **Cascade rules are deliberately asymmetric.** Deleting a `JobPost` cascades its own `job_post_tags`/`job_post_exclusions` rows (both sides — as excluder and as excluded) since those rows are owned by the job post. Deleting a `Position`/`CompanyAddress`/`Tag` that's still referenced by a job post does **not** cascade — it hits a live FK, which each domain's own service catches (`IntegrityError` → `uow.rollback()` → its own `*InUseError`, a `ConflictError` → 409) rather than letting it surface as a raw 500.
+- **`BaseRepository.update(entity)` is repo-specific, not generic.** `add(entity)` maps a *new* entity to a transient ORM object and stages an INSERT — reusing it for an update would attempt a duplicate-PK insert. Each of the 4 repositories implements its own `update(entity)`: fetch the existing session-attached ORM row by id, mutate its columns from the entity, and let SQLAlchemy's unit-of-work detect the diff and emit the UPDATE on commit. `BaseRepository` doesn't provide this generically because not every entity's PK attribute is named `.id` (e.g. `RevokedRefreshToken` uses `.jti`).
 - **`JobPostService.create()` flushes before staging tag/exclusion rows.** `job_post_tags`/`job_post_exclusions` reference `job_posts.id` by a plain FK column, not a SQLAlchemy `relationship()`, so the session's automatic insert-ordering can't infer that the `JobPost` row must exist first. An explicit `uow.flush()` after `job_posts.add(...)` (and before `add_tag`/`add_exclusion`) forces that ordering within the same still-uncommitted transaction.
-- `employment_type`/`status` are `StrEnum`s (`app/domains/jobs/enums.py`) — a bad value gets rejected by Pydantic at the request boundary (422) before the service ever runs, same principle as the `EmailStr` fix on signup. No `InvalidEmploymentTypeError`-style domain exception exists because there's nothing left for the service layer to validate.
+- `employment_type`/`status` are `StrEnum`s (`app/domains/job_posts/enums.py`) — a bad value gets rejected by Pydantic at the request boundary (422) before the service ever runs, same principle as the `EmailStr` fix on signup. No `InvalidEmploymentTypeError`-style domain exception exists because there's nothing left for the service layer to validate.
 
 ## Testing
 
