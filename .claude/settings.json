@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -o '\"file_path\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' | sed -E 's/.*:[[:space:]]*\"(.*)\"/\\1/' | { read -r f; case \"$f\" in *.py) uv run ruff check --fix \"$f\" && uv run ruff format \"$f\";; esac; } 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
