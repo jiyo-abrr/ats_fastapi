@@ -101,15 +101,20 @@ async def list_for_review(
 ```
 
 ```python
+# applications/service.py — thin pass-through, no business logic, just so the
+# router depends on the service and never the repository directly
+async def list_for_review(self, *, job_post_id, status) -> Select:
+    return await self.applications.list_for_review(job_post_id=job_post_id, status=status)
+
 # applications/router.py
 @router.get("", response_model=Page[ApplicationReviewOut], dependencies=[_manage_applications])
 async def list_applications(
     job_post_id: uuid.UUID | None = None,
     status: ApplicationStatus | None = None,
     db: AsyncSession = Depends(get_db),
-    repo: ApplicationRepository = Depends(get_application_repository),
+    service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationReviewOut]:
-    query = await repo.list_for_review(job_post_id=job_post_id, status=status)
+    query = await service.list_for_review(job_post_id=job_post_id, status=status)
     return await apaginate(db, query, transformer=lambda rows: [ApplicationReviewOut.model_validate(r) for r in rows])
 ```
 
@@ -133,6 +138,8 @@ async def list_for_applicant(self, applicant_id: uuid.UUID) -> Select:
 ```
 
 `GET /applications/{id}` (single-item detail) stays on the full-entity path — `ApplicationOut` from `_to_entity`, no projection — since a detail view is exactly the "I need the whole thing" case eager/full-entity loading is for; it's only the *list* views that wanted a handful of columns from someone else's table.
+
+Both list routes call a thin `ApplicationService.list_for_review()`/`list_for_applicant()` pass-through rather than `ApplicationRepository` directly — the query itself is still built and owned by the repository, this is purely a layering rule: **the router only ever depends on the service, never the repository**, even for the one case (list endpoints) where the service method has no business logic to add. Keeps the "router → service → repository" chain unbroken everywhere, rather than making list endpoints a second kind of exception on top of the query-construction one.
 
 ## API endpoints
 

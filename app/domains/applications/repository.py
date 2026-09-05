@@ -1,10 +1,13 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import Select, select
 
 from app.core.repository import BaseRepository
 from app.domains.applications import entities
+from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.models import Application as ApplicationModel
+from app.domains.applications.models import AssessmentDeadlineExtension
 from app.domains.auth.models import User as UserModel
 from app.domains.job_posts.models import JobPost as JobPostModel
 
@@ -21,6 +24,7 @@ class ApplicationRepository(
             applicant_id=obj.applicant_id,
             status=obj.status,
             resume_object_key=obj.resume_object_key,
+            assessment_deadline=obj.assessment_deadline,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -32,6 +36,7 @@ class ApplicationRepository(
             applicant_id=entity.applicant_id,
             status=entity.status,
             resume_object_key=entity.resume_object_key,
+            assessment_deadline=entity.assessment_deadline,
         )
 
     async def update_status(self, application_id: uuid.UUID, status: str) -> None:
@@ -39,6 +44,61 @@ class ApplicationRepository(
         if obj is None:
             return
         obj.status = status
+
+    async def set_assessment_deadline(
+        self, application_id: uuid.UUID, new_deadline
+    ) -> None:
+        obj = await self.db.get(ApplicationModel, application_id)
+        if obj is None:
+            return
+        obj.assessment_deadline = new_deadline
+
+    async def add_deadline_extension(
+        self, extension: entities.AssessmentDeadlineExtension
+    ) -> None:
+        self.db.add(
+            AssessmentDeadlineExtension(
+                id=extension.id,
+                application_id=extension.application_id,
+                extended_by_user_id=extension.extended_by_user_id,
+                reason=extension.reason,
+                previous_deadline=extension.previous_deadline,
+                new_deadline=extension.new_deadline,
+            )
+        )
+
+    async def list_deadline_extensions(
+        self, application_id: uuid.UUID
+    ) -> list[entities.AssessmentDeadlineExtension]:
+        result = await self.db.execute(
+            select(AssessmentDeadlineExtension)
+            .where(AssessmentDeadlineExtension.application_id == application_id)
+            .order_by(AssessmentDeadlineExtension.extended_at.desc())
+        )
+        return [
+            entities.AssessmentDeadlineExtension(
+                id=row.id,
+                application_id=row.application_id,
+                extended_by_user_id=row.extended_by_user_id,
+                reason=row.reason,
+                previous_deadline=row.previous_deadline,
+                new_deadline=row.new_deadline,
+                extended_at=row.extended_at,
+            )
+            for row in result.scalars().all()
+        ]
+
+    async def list_overdue_applied(self, now: datetime) -> list[entities.Application]:
+        """Applications still `applied` whose assessment_deadline has passed
+        — candidates for the disqualification sweep."""
+        result = await self.db.execute(
+            select(ApplicationModel).where(
+                ApplicationModel.status == ApplicationStatus.APPLIED.value,
+                ApplicationModel.assessment_deadline.is_not(None),
+                ApplicationModel.assessment_deadline < now,
+            )
+        )
+        return [await self._to_entity(obj) for obj in result.scalars().all()]
 
     async def has_any_application_for(
         self, applicant_id: uuid.UUID, job_post_id: uuid.UUID

@@ -45,14 +45,50 @@ class Application(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default=ApplicationStatus.SUBMITTED.value
+        String(20), nullable=False, default=ApplicationStatus.APPLIED.value
     )
     # Snapshot of the applicant's resume at the time of applying — deliberately
     # not a live reference to User.resume_object_key, which can change later.
     resume_object_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Shared deadline covering all 3 required assessments (see the
+    # assessments domain) — set at apply-time from the job post's
+    # assessment_window_days, extendable per-applicant via
+    # ApplicationService.extend_assessment_deadline().
+    assessment_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AssessmentDeadlineExtension(Base):
+    """Append-only audit log: every time HR extends an application's
+    assessment_deadline. Never edited or deleted once written."""
+
+    __tablename__ = "assessment_deadline_extensions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("applications.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    extended_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    previous_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    new_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    extended_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

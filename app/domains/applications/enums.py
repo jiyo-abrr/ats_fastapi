@@ -2,8 +2,11 @@ from enum import StrEnum
 
 
 class ApplicationStatus(StrEnum):
-    SUBMITTED = "submitted"
-    UNDER_REVIEW = "under_review"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
+    APPLIED = "applied"
+    PRESCREENING = "prescreening"
+    INTERVIEW = "interview"
+    DENIED = "denied"
+    SUCCESS = "success"
+    FAILED = "failed"
+    DISQUALIFIED = "disqualified"
     WITHDRAWN = "withdrawn"

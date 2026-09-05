@@ -130,3 +130,81 @@ async def remove_job_post_exclusion(
     service: JobPostService = Depends(get_job_post_service),
 ) -> JobPostOut:
     return await service.remove_exclusion(job_post_id, excluded_job_post_id)
+
+
+@router.post(
+    "/{job_post_id}/pre-assessment-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def add_job_post_pre_assessment_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.add_pre_assessment_template(job_post_id, template_id)
+
+
+@router.delete(
+    "/{job_post_id}/pre-assessment-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def remove_job_post_pre_assessment_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.remove_pre_assessment_template(job_post_id)
+
+
+@router.post(
+    "/{job_post_id}/culture-fit-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def add_job_post_culture_fit_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.add_culture_fit_template(job_post_id, template_id)
+
+
+@router.delete(
+    "/{job_post_id}/culture-fit-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def remove_job_post_culture_fit_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.remove_culture_fit_template(job_post_id)
+
+
+@router.post(
+    "/{job_post_id}/technical-assessment-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def add_job_post_technical_assessment_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.add_technical_assessment_template(job_post_id, template_id)
+
+
+@router.delete(
+    "/{job_post_id}/technical-assessment-templates/{template_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def remove_job_post_technical_assessment_template(
+    job_post_id: uuid.UUID,
+    template_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.remove_technical_assessment_template(job_post_id)

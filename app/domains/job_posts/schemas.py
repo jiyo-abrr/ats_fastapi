@@ -21,6 +21,7 @@ class JobPostCreate(BaseModel):
     position_id: uuid.UUID
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = Field(default_factory=list)
+    assessment_window_days: int = 4
 
 
 class JobPostUpdate(BaseModel):
@@ -34,6 +35,7 @@ class JobPostUpdate(BaseModel):
     status: JobPostStatus
     company_address_id: uuid.UUID
     position_id: uuid.UUID
+    assessment_window_days: int = 4
 
 
 class JobPostOut(BaseModel):
@@ -52,7 +54,11 @@ class JobPostOut(BaseModel):
     company_address_label: str
     position_id: uuid.UUID
     position_title: str
+    assessment_window_days: int
     tags: list[TagOut]
     excluded_job_post_ids: list[uuid.UUID]
+    pre_assessment_template_id: uuid.UUID | None
+    culture_fit_template_id: uuid.UUID | None
+    technical_assessment_template_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

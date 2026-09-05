@@ -6,7 +6,13 @@ from sqlalchemy.orm import selectinload
 from app.core.repository import BaseRepository
 from app.domains.job_posts import entities
 from app.domains.job_posts.models import JobPost as JobPostModel
-from app.domains.job_posts.models import JobPostExclusion, JobPostTag
+from app.domains.job_posts.models import (
+    JobPostCultureFitTemplate,
+    JobPostExclusion,
+    JobPostPreAssessmentTemplate,
+    JobPostTag,
+    JobPostTechnicalAssessmentTemplate,
+)
 from app.domains.tags.entities import Tag
 from app.domains.tags.models import Tag as TagModel
 
@@ -34,6 +40,16 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             row.excluded_job_post_id for row in exclusions_result.scalars().all()
         ]
 
+        pre_assessment_template_id = await self._get_attached_template_id(
+            JobPostPreAssessmentTemplate, obj.id
+        )
+        culture_fit_template_id = await self._get_attached_template_id(
+            JobPostCultureFitTemplate, obj.id
+        )
+        technical_assessment_template_id = await self._get_attached_template_id(
+            JobPostTechnicalAssessmentTemplate, obj.id
+        )
+
         return entities.JobPost(
             id=obj.id,
             job_title=obj.job_title,
@@ -48,11 +64,23 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             company_address_label=obj.company_address.label,
             position_id=obj.position_id,
             position_title=obj.position.title,
+            assessment_window_days=obj.assessment_window_days,
             tags=[Tag(id=t.id, name=t.name, description=t.description) for t in tags],
             excluded_job_post_ids=excluded_ids,
+            pre_assessment_template_id=pre_assessment_template_id,
+            culture_fit_template_id=culture_fit_template_id,
+            technical_assessment_template_id=technical_assessment_template_id,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
+
+    async def _get_attached_template_id(
+        self, join_model, job_post_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        result = await self.db.execute(
+            select(join_model.template_id).where(join_model.job_post_id == job_post_id)
+        )
+        return result.scalar_one_or_none()
 
     def _to_model(self, entity: entities.JobPost) -> JobPostModel:
         return JobPostModel(
@@ -67,6 +95,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             status=entity.status,
             company_address_id=entity.company_address_id,
             position_id=entity.position_id,
+            assessment_window_days=entity.assessment_window_days,
         )
 
     # Overridden: _to_entity accesses obj.company_address.label / obj.position.title
@@ -99,6 +128,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         obj.status = entity.status
         obj.company_address_id = entity.company_address_id
         obj.position_id = entity.position_id
+        obj.assessment_window_days = entity.assessment_window_days
 
     async def add_tag(self, job_post_id: uuid.UUID, tag_id: uuid.UUID) -> None:
         if await self.db.get(JobPostTag, (job_post_id, tag_id)) is not None:
@@ -130,5 +160,65 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         row = await self.db.get(
             JobPostExclusion, (job_post_id, excluded_job_post_id)
         )
+        if row is not None:
+            await self.db.delete(row)
+
+    # --- assessment template attachments (one pair of methods per type,
+    # each its own real-FK join table with UniqueConstraint(job_post_id)
+    # enforcing "at most one per job post") -----------------------------
+
+    async def has_pre_assessment_template(self, job_post_id: uuid.UUID) -> bool:
+        return (
+            await self.db.get(JobPostPreAssessmentTemplate, job_post_id) is not None
+        )
+
+    async def set_pre_assessment_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> None:
+        self.db.add(
+            JobPostPreAssessmentTemplate(
+                job_post_id=job_post_id, template_id=template_id
+            )
+        )
+
+    async def remove_pre_assessment_template(self, job_post_id: uuid.UUID) -> None:
+        row = await self.db.get(JobPostPreAssessmentTemplate, job_post_id)
+        if row is not None:
+            await self.db.delete(row)
+
+    async def has_culture_fit_template(self, job_post_id: uuid.UUID) -> bool:
+        return await self.db.get(JobPostCultureFitTemplate, job_post_id) is not None
+
+    async def set_culture_fit_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> None:
+        self.db.add(
+            JobPostCultureFitTemplate(job_post_id=job_post_id, template_id=template_id)
+        )
+
+    async def remove_culture_fit_template(self, job_post_id: uuid.UUID) -> None:
+        row = await self.db.get(JobPostCultureFitTemplate, job_post_id)
+        if row is not None:
+            await self.db.delete(row)
+
+    async def has_technical_assessment_template(self, job_post_id: uuid.UUID) -> bool:
+        return (
+            await self.db.get(JobPostTechnicalAssessmentTemplate, job_post_id)
+            is not None
+        )
+
+    async def set_technical_assessment_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> None:
+        self.db.add(
+            JobPostTechnicalAssessmentTemplate(
+                job_post_id=job_post_id, template_id=template_id
+            )
+        )
+
+    async def remove_technical_assessment_template(
+        self, job_post_id: uuid.UUID
+    ) -> None:
+        row = await self.db.get(JobPostTechnicalAssessmentTemplate, job_post_id)
         if row is not None:
             await self.db.delete(row)

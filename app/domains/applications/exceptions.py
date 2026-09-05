@@ -28,3 +28,7 @@ class JobPostNotAcceptingApplicationsError(ValidationError):
 
 class InvalidApplicationStatusTransitionError(ValidationError):
     pass
+
+
+class InvalidAssessmentDeadlineExtensionError(ValidationError):
+    pass

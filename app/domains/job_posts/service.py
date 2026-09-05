@@ -5,14 +5,33 @@ from app.core.unit_of_work import UnitOfWork
 from app.domains.company_addresses import entities as address_entities
 from app.domains.company_addresses.exceptions import CompanyAddressNotFoundError
 from app.domains.company_addresses.repository import CompanyAddressRepository
+from app.domains.culture_fit_templates.exceptions import (
+    CultureFitTemplateNotFoundError,
+)
+from app.domains.culture_fit_templates.repository import CultureFitTemplateRepository
 from app.domains.job_posts import entities
-from app.domains.job_posts.exceptions import JobPostNotFoundError
+from app.domains.job_posts.exceptions import (
+    AssessmentTemplateAlreadyAttachedError,
+    JobPostNotFoundError,
+)
 from app.domains.job_posts.repository import JobPostRepository
 from app.domains.positions import entities as position_entities
 from app.domains.positions.exceptions import PositionNotFoundError
 from app.domains.positions.repository import PositionRepository
+from app.domains.pre_assessment_templates.exceptions import (
+    PreAssessmentTemplateNotFoundError,
+)
+from app.domains.pre_assessment_templates.repository import (
+    PreAssessmentTemplateRepository,
+)
 from app.domains.tags.exceptions import TagNotFoundError
 from app.domains.tags.repository import TagRepository
+from app.domains.technical_assessment_templates.exceptions import (
+    TechnicalAssessmentTemplateNotFoundError,
+)
+from app.domains.technical_assessment_templates.repository import (
+    TechnicalAssessmentTemplateRepository,
+)
 
 
 class JobPostService:
@@ -22,12 +41,18 @@ class JobPostService:
         positions: PositionRepository,
         addresses: CompanyAddressRepository,
         tags: TagRepository,
+        pre_assessment_templates: PreAssessmentTemplateRepository,
+        culture_fit_templates: CultureFitTemplateRepository,
+        technical_assessment_templates: TechnicalAssessmentTemplateRepository,
         uow: UnitOfWork,
     ):
         self.job_posts = job_posts
         self.positions = positions
         self.addresses = addresses
         self.tags = tags
+        self.pre_assessment_templates = pre_assessment_templates
+        self.culture_fit_templates = culture_fit_templates
+        self.technical_assessment_templates = technical_assessment_templates
         self.uow = uow
 
     async def _require_position(
@@ -72,6 +97,7 @@ class JobPostService:
         position_id: uuid.UUID,
         tag_ids: list[uuid.UUID],
         excluded_job_post_ids: list[uuid.UUID],
+        assessment_window_days: int = 4,
     ) -> entities.JobPost:
         address = await self._require_address(company_address_id)
         position = await self._require_position(position_id)
@@ -97,6 +123,7 @@ class JobPostService:
                 company_address_label=address.label,
                 position_id=position_id,
                 position_title=position.title,
+                assessment_window_days=assessment_window_days,
             )
         )
         # Flush before staging tag/exclusion rows: they reference job_posts.id
@@ -126,6 +153,7 @@ class JobPostService:
         status: str,
         company_address_id: uuid.UUID,
         position_id: uuid.UUID,
+        assessment_window_days: int = 4,
     ) -> entities.JobPost:
         await self.get(job_post_id)
         address = await self._require_address(company_address_id)
@@ -146,6 +174,7 @@ class JobPostService:
                 company_address_label=address.label,
                 position_id=position_id,
                 position_title=position.title,
+                assessment_window_days=assessment_window_days,
             )
         )
         await self.uow.commit()
@@ -188,5 +217,82 @@ class JobPostService:
     ) -> entities.JobPost:
         await self.get(job_post_id)
         await self.job_posts.remove_exclusion(job_post_id, excluded_job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def add_pre_assessment_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        if await self.pre_assessment_templates.get_by_id(template_id) is None:
+            raise PreAssessmentTemplateNotFoundError(
+                f"Pre-assessment template '{template_id}' not found"
+            )
+        if await self.job_posts.has_pre_assessment_template(job_post_id):
+            raise AssessmentTemplateAlreadyAttachedError(
+                f"Job post '{job_post_id}' already has a pre-assessment "
+                "template attached"
+            )
+        await self.job_posts.set_pre_assessment_template(job_post_id, template_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def remove_pre_assessment_template(
+        self, job_post_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        await self.job_posts.remove_pre_assessment_template(job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def add_culture_fit_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        if await self.culture_fit_templates.get_by_id(template_id) is None:
+            raise CultureFitTemplateNotFoundError(
+                f"Culture-fit template '{template_id}' not found"
+            )
+        if await self.job_posts.has_culture_fit_template(job_post_id):
+            raise AssessmentTemplateAlreadyAttachedError(
+                f"Job post '{job_post_id}' already has a culture-fit "
+                "template attached"
+            )
+        await self.job_posts.set_culture_fit_template(job_post_id, template_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def remove_culture_fit_template(
+        self, job_post_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        await self.job_posts.remove_culture_fit_template(job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def add_technical_assessment_template(
+        self, job_post_id: uuid.UUID, template_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        if await self.technical_assessment_templates.get_by_id(template_id) is None:
+            raise TechnicalAssessmentTemplateNotFoundError(
+                f"Technical assessment template '{template_id}' not found"
+            )
+        if await self.job_posts.has_technical_assessment_template(job_post_id):
+            raise AssessmentTemplateAlreadyAttachedError(
+                f"Job post '{job_post_id}' already has a technical "
+                "assessment template attached"
+            )
+        await self.job_posts.set_technical_assessment_template(
+            job_post_id, template_id
+        )
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def remove_technical_assessment_template(
+        self, job_post_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        await self.job_posts.remove_technical_assessment_template(job_post_id)
         await self.uow.commit()
         return await self.job_posts.get_by_id(job_post_id)

@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +56,12 @@ class JobPost(Base):
         UUID(as_uuid=True), ForeignKey("positions.id"), nullable=False
     )
     position: Mapped["Position"] = relationship()
+    # How many days an applicant has to complete all required assessments
+    # (see the assessments domain) after applying — copied onto
+    # Application.assessment_deadline at apply-time.
+    assessment_window_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=4
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -69,6 +83,55 @@ class JobPostTag(Base):
     )
     tag_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tags.id"), primary_key=True
+    )
+
+
+class JobPostPreAssessmentTemplate(Base):
+    __tablename__ = "job_post_pre_assessment_templates"
+
+    # job_post_id is the SOLE primary key (not composite with template_id) —
+    # that's what makes "at most one pre-assessment template per job post"
+    # structural rather than a separate constraint to maintain.
+    job_post_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("job_posts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # No cascade: deleting a shared, reusable template while it's attached
+    # to a job post must be blocked (PreAssessmentTemplateService.delete()
+    # catches the IntegrityError as a 409), same as tag_id above. A real FK
+    # is possible here (unlike the old single discriminated join table)
+    # because this table only ever points at pre_assessment_templates.
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pre_assessment_templates.id"), nullable=False
+    )
+
+
+class JobPostCultureFitTemplate(Base):
+    __tablename__ = "job_post_culture_fit_templates"
+
+    job_post_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("job_posts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("culture_fit_templates.id"), nullable=False
+    )
+
+
+class JobPostTechnicalAssessmentTemplate(Base):
+    __tablename__ = "job_post_technical_assessment_templates"
+
+    job_post_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("job_posts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("technical_assessment_templates.id"),
+        nullable=False,
     )
 
 

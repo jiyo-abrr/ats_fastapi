@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,6 +12,7 @@ from app.domains.applications.exceptions import (
     ApplicationNotFoundError,
     DuplicateApplicationError,
     InvalidApplicationStatusTransitionError,
+    InvalidAssessmentDeadlineExtensionError,
     JobPostNotAcceptingApplicationsError,
     OnlyApplicantsCanApplyError,
 )
@@ -65,6 +66,7 @@ def make_job_post(**overrides) -> job_post_entities.JobPost:
         company_address_label="HQ",
         position_id=uuid.uuid4(),
         position_title="Backend Engineer",
+        assessment_window_days=4,
         excluded_job_post_ids=[],
     )
     defaults.update(overrides)
@@ -76,8 +78,9 @@ def make_application(**overrides) -> entities.Application:
         id=uuid.uuid4(),
         job_post_id=uuid.uuid4(),
         applicant_id=uuid.uuid4(),
-        status=ApplicationStatus.SUBMITTED,
+        status=ApplicationStatus.APPLIED,
         resume_object_key="applicant_resume/x/resume.pdf",
+        assessment_deadline=datetime.now(UTC) + timedelta(days=4),
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -137,9 +140,9 @@ class TestCreate:
 
         uow.rollback.assert_called_once()
 
-    async def test_happy_path_snapshots_resume_and_commits(self):
+    async def test_happy_path_snapshots_resume_sets_deadline_and_commits(self):
         service, applications, job_posts, role_permissions, uow = make_service()
-        job_post = make_job_post()
+        job_post = make_job_post(assessment_window_days=4)
         job_posts.get_by_id.return_value = job_post
         applications.has_any_application_for.return_value = False
         user = make_user(resume_object_key="applicant_resume/x/latest.pdf")
@@ -148,11 +151,18 @@ class TestCreate:
         applications.add.side_effect = lambda entity: added.update(entity=entity)
         applications.get_by_id.side_effect = lambda application_id: added["entity"]
 
+        before = datetime.now(UTC)
         result = await service.create(job_post_id=job_post.id, current_user=user)
+        after = datetime.now(UTC)
 
         assert added["entity"].applicant_id == user.id
         assert added["entity"].resume_object_key == "applicant_resume/x/latest.pdf"
-        assert added["entity"].status == ApplicationStatus.SUBMITTED
+        assert added["entity"].status == ApplicationStatus.APPLIED
+        assert (
+            before + timedelta(days=4)
+            <= added["entity"].assessment_deadline
+            <= after + timedelta(days=4)
+        )
         uow.commit.assert_called_once()
         assert result is added["entity"]
 
@@ -201,7 +211,7 @@ class TestWithdraw:
         service, applications, job_posts, role_permissions, uow = make_service()
         user = make_user()
         application = make_application(
-            applicant_id=user.id, status=ApplicationStatus.SUBMITTED
+            applicant_id=user.id, status=ApplicationStatus.APPLIED
         )
         applications.get_by_id.return_value = application
 
@@ -226,7 +236,7 @@ class TestWithdraw:
         service, applications, job_posts, role_permissions, uow = make_service()
         user = make_user()
         application = make_application(
-            applicant_id=user.id, status=ApplicationStatus.ACCEPTED
+            applicant_id=user.id, status=ApplicationStatus.SUCCESS
         )
         applications.get_by_id.return_value = application
 
@@ -235,30 +245,180 @@ class TestWithdraw:
 
 
 class TestUpdateStatus:
-    async def test_allows_submitted_to_under_review(self):
+    async def test_allows_applied_to_prescreening(self):
         service, applications, job_posts, role_permissions, uow = make_service()
-        application = make_application(status=ApplicationStatus.SUBMITTED)
+        application = make_application(status=ApplicationStatus.APPLIED)
         applications.get_by_id.return_value = application
 
-        await service.update_status(application.id, ApplicationStatus.UNDER_REVIEW)
+        await service.update_status(application.id, ApplicationStatus.PRESCREENING)
 
         applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.UNDER_REVIEW
+            application.id, ApplicationStatus.PRESCREENING
         )
         uow.commit.assert_called_once()
 
+    async def test_allows_applied_to_denied_directly(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.APPLIED)
+        applications.get_by_id.return_value = application
+
+        await service.update_status(application.id, ApplicationStatus.DENIED)
+
+        applications.update_status.assert_called_once_with(
+            application.id, ApplicationStatus.DENIED
+        )
+
+    async def test_allows_prescreening_to_interview(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.PRESCREENING)
+        applications.get_by_id.return_value = application
+
+        await service.update_status(application.id, ApplicationStatus.INTERVIEW)
+
+        applications.update_status.assert_called_once_with(
+            application.id, ApplicationStatus.INTERVIEW
+        )
+
+    async def test_allows_interview_to_success_or_failed(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.INTERVIEW)
+        applications.get_by_id.return_value = application
+
+        await service.update_status(application.id, ApplicationStatus.SUCCESS)
+
+        applications.update_status.assert_called_once_with(
+            application.id, ApplicationStatus.SUCCESS
+        )
+
     async def test_rejects_backwards_transition(self):
         service, applications, job_posts, role_permissions, uow = make_service()
-        application = make_application(status=ApplicationStatus.ACCEPTED)
+        application = make_application(status=ApplicationStatus.SUCCESS)
         applications.get_by_id.return_value = application
 
         with pytest.raises(InvalidApplicationStatusTransitionError):
-            await service.update_status(application.id, ApplicationStatus.UNDER_REVIEW)
+            await service.update_status(application.id, ApplicationStatus.INTERVIEW)
 
     async def test_rejects_hr_setting_withdrawn(self):
         service, applications, job_posts, role_permissions, uow = make_service()
-        application = make_application(status=ApplicationStatus.SUBMITTED)
+        application = make_application(status=ApplicationStatus.APPLIED)
         applications.get_by_id.return_value = application
 
         with pytest.raises(InvalidApplicationStatusTransitionError):
             await service.update_status(application.id, ApplicationStatus.WITHDRAWN)
+
+    async def test_rejects_hr_setting_disqualified(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.APPLIED)
+        applications.get_by_id.return_value = application
+
+        with pytest.raises(InvalidApplicationStatusTransitionError):
+            await service.update_status(
+                application.id, ApplicationStatus.DISQUALIFIED
+            )
+
+
+class TestExtendAssessmentDeadline:
+    async def test_extends_with_absolute_new_deadline(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.APPLIED)
+        applications.get_by_id.return_value = application
+        new_deadline = datetime.now(UTC) + timedelta(days=10)
+
+        await service.extend_assessment_deadline(
+            application.id,
+            new_deadline=new_deadline,
+            extend_by_days=None,
+            reason="Applicant requested more time",
+            current_user=make_user(role="hr"),
+        )
+
+        applications.set_assessment_deadline.assert_called_once_with(
+            application.id, new_deadline
+        )
+        applications.add_deadline_extension.assert_called_once()
+        uow.commit.assert_called_once()
+
+    async def test_extends_with_relative_days_from_current_deadline(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        current_deadline = datetime.now(UTC) + timedelta(days=1)
+        application = make_application(
+            status=ApplicationStatus.APPLIED, assessment_deadline=current_deadline
+        )
+        applications.get_by_id.return_value = application
+
+        await service.extend_assessment_deadline(
+            application.id,
+            new_deadline=None,
+            extend_by_days=2,
+            reason="Extension requested",
+            current_user=make_user(role="hr"),
+        )
+
+        applications.set_assessment_deadline.assert_called_once_with(
+            application.id, current_deadline + timedelta(days=2)
+        )
+
+    async def test_reviving_a_disqualified_application_sets_status_back_to_applied(
+        self,
+    ):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.DISQUALIFIED)
+        applications.get_by_id.return_value = application
+
+        await service.extend_assessment_deadline(
+            application.id,
+            new_deadline=datetime.now(UTC) + timedelta(days=4),
+            extend_by_days=None,
+            reason="System outage during assessment window",
+            current_user=make_user(role="hr"),
+        )
+
+        applications.update_status.assert_called_once_with(
+            application.id, ApplicationStatus.APPLIED
+        )
+
+    async def test_rejects_extension_for_decided_application(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.PRESCREENING)
+        applications.get_by_id.return_value = application
+
+        with pytest.raises(InvalidAssessmentDeadlineExtensionError):
+            await service.extend_assessment_deadline(
+                application.id,
+                new_deadline=datetime.now(UTC) + timedelta(days=4),
+                extend_by_days=None,
+                reason="reason",
+                current_user=make_user(role="hr"),
+            )
+
+
+class TestDisqualify:
+    async def test_disqualifies_an_applied_application(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.APPLIED)
+        applications.get_by_id.return_value = application
+
+        await service.disqualify(application.id)
+
+        applications.update_status.assert_called_once_with(
+            application.id, ApplicationStatus.DISQUALIFIED
+        )
+        uow.commit.assert_called_once()
+
+    async def test_idempotent_noop_if_already_moved_past_applied(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.PRESCREENING)
+        applications.get_by_id.return_value = application
+
+        await service.disqualify(application.id)
+
+        applications.update_status.assert_not_called()
+        uow.commit.assert_not_called()
+
+    async def test_noop_if_application_missing(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.get_by_id.return_value = None
+
+        await service.disqualify(uuid.uuid4())
+
+        applications.update_status.assert_not_called()
