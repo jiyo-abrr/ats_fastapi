@@ -1,5 +1,8 @@
 import uuid
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 from app.core.repository import BaseRepository
 from app.domains.auth import entities
 from app.domains.auth.models import RevokedRefreshToken as RevokedRefreshTokenModel
@@ -9,7 +12,7 @@ from app.domains.auth.models import User as UserModel
 class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
     model = UserModel
 
-    def _to_entity(self, obj: UserModel) -> entities.User:
+    async def _to_entity(self, obj: UserModel) -> entities.User:
         return entities.User(
             id=obj.id,
             first_name=obj.first_name,
@@ -38,9 +41,32 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             resume_object_key=entity.resume_object_key,
         )
 
-    def get_by_email(self, email: str) -> entities.User | None:
-        obj = self.db.query(UserModel).filter(UserModel.email == email).first()
-        return self._to_entity(obj) if obj is not None else None
+    # Overridden: _to_entity accesses obj.role.name — under AsyncSession that
+    # attribute must already be loaded (no implicit lazy-load like sync has),
+    # so every fetch path here eager-loads the role relationship.
+    async def get_by_id(self, id: uuid.UUID) -> entities.User | None:
+        result = await self.db.execute(
+            select(UserModel)
+            .where(UserModel.id == id)
+            .options(selectinload(UserModel.role))
+        )
+        obj = result.scalar_one_or_none()
+        return await self._to_entity(obj) if obj is not None else None
+
+    async def list_all(self) -> list[entities.User]:
+        result = await self.db.execute(
+            select(UserModel).options(selectinload(UserModel.role))
+        )
+        return [await self._to_entity(obj) for obj in result.scalars().all()]
+
+    async def get_by_email(self, email: str) -> entities.User | None:
+        result = await self.db.execute(
+            select(UserModel)
+            .where(UserModel.email == email)
+            .options(selectinload(UserModel.role))
+        )
+        obj = result.scalar_one_or_none()
+        return await self._to_entity(obj) if obj is not None else None
 
 
 class RevokedRefreshTokenRepository(
@@ -48,7 +74,9 @@ class RevokedRefreshTokenRepository(
 ):
     model = RevokedRefreshTokenModel
 
-    def _to_entity(self, obj: RevokedRefreshTokenModel) -> entities.RevokedRefreshToken:
+    async def _to_entity(
+        self, obj: RevokedRefreshTokenModel
+    ) -> entities.RevokedRefreshToken:
         return entities.RevokedRefreshToken(
             jti=obj.jti, expires_at=obj.expires_at, revoked_at=obj.revoked_at
         )
@@ -58,5 +86,5 @@ class RevokedRefreshTokenRepository(
     ) -> RevokedRefreshTokenModel:
         return RevokedRefreshTokenModel(jti=entity.jti, expires_at=entity.expires_at)
 
-    def is_revoked(self, jti: str) -> bool:
-        return self.get_by_id(jti) is not None
+    async def is_revoked(self, jti: str) -> bool:
+        return await self.get_by_id(jti) is not None

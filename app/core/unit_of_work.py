@@ -1,22 +1,22 @@
 from fastapi import Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 
 
 class UnitOfWork:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
 
-    def flush(self) -> None:
-        self.db.flush()
+    async def flush(self) -> None:
+        await self.db.flush()
 
-    def commit(self) -> None:
-        self.db.commit()
+    async def commit(self) -> None:
+        await self.db.commit()
 
-    def rollback(self) -> None:
-        self.db.rollback()
+    async def rollback(self) -> None:
+        await self.db.rollback()
 
 
-def get_unit_of_work(db: Session = Depends(get_db)) -> UnitOfWork:
+def get_unit_of_work(db: AsyncSession = Depends(get_db)) -> UnitOfWork:
     return UnitOfWork(db)

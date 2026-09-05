@@ -8,7 +8,7 @@ from app.domains.positions.models import Position as PositionModel
 class PositionRepository(BaseRepository[PositionModel, entities.Position, uuid.UUID]):
     model = PositionModel
 
-    def _to_entity(self, obj: PositionModel) -> entities.Position:
+    async def _to_entity(self, obj: PositionModel) -> entities.Position:
         return entities.Position(
             id=obj.id,
             title=obj.title,
@@ -22,8 +22,8 @@ class PositionRepository(BaseRepository[PositionModel, entities.Position, uuid.U
             id=entity.id, title=entity.title, description=entity.description
         )
 
-    def update(self, entity: entities.Position) -> None:
-        obj = self.db.get(PositionModel, entity.id)
+    async def update(self, entity: entities.Position) -> None:
+        obj = await self.db.get(PositionModel, entity.id)
         if obj is None:
             return
         obj.title = entity.title

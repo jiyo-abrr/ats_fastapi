@@ -13,40 +13,42 @@ class PositionService:
         self.positions = positions
         self.uow = uow
 
-    def create(self, *, title: str, description: str | None) -> entities.Position:
+    async def create(
+        self, *, title: str, description: str | None
+    ) -> entities.Position:
         position_id = uuid.uuid4()
-        self.positions.add(
+        await self.positions.add(
             entities.Position(id=position_id, title=title, description=description)
         )
-        self.uow.commit()
-        return self.positions.get_by_id(position_id)
+        await self.uow.commit()
+        return await self.positions.get_by_id(position_id)
 
-    def get(self, position_id: uuid.UUID) -> entities.Position:
-        position = self.positions.get_by_id(position_id)
+    async def get(self, position_id: uuid.UUID) -> entities.Position:
+        position = await self.positions.get_by_id(position_id)
         if position is None:
             raise PositionNotFoundError(f"Position '{position_id}' not found")
         return position
 
-    def list(self) -> list[entities.Position]:
-        return self.positions.list_all()
+    async def list(self) -> list[entities.Position]:
+        return await self.positions.list_all()
 
-    def update(
+    async def update(
         self, position_id: uuid.UUID, *, title: str, description: str | None
     ) -> entities.Position:
-        self.get(position_id)
-        self.positions.update(
+        await self.get(position_id)
+        await self.positions.update(
             entities.Position(id=position_id, title=title, description=description)
         )
-        self.uow.commit()
-        return self.positions.get_by_id(position_id)
+        await self.uow.commit()
+        return await self.positions.get_by_id(position_id)
 
-    def delete(self, position_id: uuid.UUID) -> None:
-        self.get(position_id)
-        self.positions.delete(position_id)
+    async def delete(self, position_id: uuid.UUID) -> None:
+        await self.get(position_id)
+        await self.positions.delete(position_id)
         try:
-            self.uow.commit()
+            await self.uow.commit()
         except IntegrityError:
-            self.uow.rollback()
+            await self.uow.rollback()
             raise PositionInUseError(
                 f"Position '{position_id}' is still referenced by one or more "
                 "job posts"

@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,10 +9,10 @@ from app.domains.rbac.service import RBACService
 
 
 def make_service():
-    roles = MagicMock()
-    permissions = MagicMock()
-    role_permissions = MagicMock()
-    uow = MagicMock()
+    roles = AsyncMock()
+    permissions = AsyncMock()
+    role_permissions = AsyncMock()
+    uow = AsyncMock()
     service = RBACService(roles, permissions, role_permissions, uow)
     return service, roles, permissions, role_permissions, uow
 
@@ -26,62 +26,62 @@ def make_permission(key="manage_hr_accounts") -> entities.Permission:
 
 
 class TestGrant:
-    def test_raises_when_role_missing(self):
+    async def test_raises_when_role_missing(self):
         service, roles, permissions, role_permissions, uow = make_service()
         roles.get_by_name.return_value = None
 
         with pytest.raises(RoleNotFoundError):
-            service.grant("ghost", "manage_hr_accounts")
+            await service.grant("ghost", "manage_hr_accounts")
 
         role_permissions.grant.assert_not_called()
         uow.commit.assert_not_called()
 
-    def test_raises_when_permission_missing(self):
+    async def test_raises_when_permission_missing(self):
         service, roles, permissions, role_permissions, uow = make_service()
         roles.get_by_name.return_value = make_role()
         permissions.get_by_key.return_value = None
 
         with pytest.raises(PermissionNotFoundError):
-            service.grant("hr", "ghost_permission")
+            await service.grant("hr", "ghost_permission")
 
         role_permissions.grant.assert_not_called()
         uow.commit.assert_not_called()
 
-    def test_grants_and_commits(self):
+    async def test_grants_and_commits(self):
         service, roles, permissions, role_permissions, uow = make_service()
         role = make_role()
         permission = make_permission()
         roles.get_by_name.return_value = role
         permissions.get_by_key.return_value = permission
 
-        service.grant("hr", "manage_hr_accounts")
+        await service.grant("hr", "manage_hr_accounts")
 
         role_permissions.grant.assert_called_once_with(role.id, permission.id)
         uow.commit.assert_called_once()
 
 
 class TestRevoke:
-    def test_revokes_and_commits(self):
+    async def test_revokes_and_commits(self):
         service, roles, permissions, role_permissions, uow = make_service()
         role = make_role()
         permission = make_permission()
         roles.get_by_name.return_value = role
         permissions.get_by_key.return_value = permission
 
-        service.revoke("hr", "manage_hr_accounts")
+        await service.revoke("hr", "manage_hr_accounts")
 
         role_permissions.revoke.assert_called_once_with(role.id, permission.id)
         uow.commit.assert_called_once()
 
 
 class TestListRoles:
-    def test_lists_roles_with_their_permissions(self):
+    async def test_lists_roles_with_their_permissions(self):
         service, roles, permissions, role_permissions, uow = make_service()
         role = make_role("admin")
         roles.list_all.return_value = [role]
         role_permissions.list_for_role.return_value = [make_permission("manage_rbac")]
 
-        result = service.list_roles()
+        result = await service.list_roles()
 
         assert len(result) == 1
         assert result[0].name == "admin"
@@ -89,11 +89,11 @@ class TestListRoles:
 
 
 class TestListPermissions:
-    def test_lists_all_permissions(self):
+    async def test_lists_all_permissions(self):
         service, roles, permissions, role_permissions, uow = make_service()
         permissions.list_all.return_value = [make_permission("manage_own_profile")]
 
-        result = service.list_permissions()
+        result = await service.list_permissions()
 
         assert len(result) == 1
         assert result[0].key == "manage_own_profile"

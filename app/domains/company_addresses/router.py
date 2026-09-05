@@ -1,8 +1,18 @@
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.company_addresses.dependencies import get_company_address_service
+from app.core.database import get_db
+from app.domains.company_addresses.dependencies import (
+    get_company_address_repository,
+    get_company_address_service,
+)
+from app.domains.company_addresses.models import CompanyAddress as CompanyAddressModel
+from app.domains.company_addresses.repository import CompanyAddressRepository
 from app.domains.company_addresses.schemas import (
     CompanyAddressCreate,
     CompanyAddressOut,
@@ -22,37 +32,39 @@ router = APIRouter(prefix="/company-addresses", tags=["company-addresses"])
     status_code=status.HTTP_201_CREATED,
     dependencies=[_manage_jobs],
 )
-def create_company_address(
+async def create_company_address(
     payload: CompanyAddressCreate,
     service: CompanyAddressService = Depends(get_company_address_service),
 ) -> CompanyAddressOut:
-    return service.create(**payload.model_dump())
+    return await service.create(**payload.model_dump())
 
 
-@router.get("", response_model=list[CompanyAddressOut])
-def list_company_addresses(
-    service: CompanyAddressService = Depends(get_company_address_service),
-) -> list[CompanyAddressOut]:
-    return service.list()
+@router.get("", response_model=Page[CompanyAddressOut])
+async def list_company_addresses(
+    query=QueryBuilder(CompanyAddressModel),
+    db: AsyncSession = Depends(get_db),
+    repo: CompanyAddressRepository = Depends(get_company_address_repository),
+) -> Page[CompanyAddressOut]:
+    return await apaginate(db, query, transformer=repo.map_many)
 
 
 @router.get("/{address_id}", response_model=CompanyAddressOut)
-def get_company_address(
+async def get_company_address(
     address_id: uuid.UUID,
     service: CompanyAddressService = Depends(get_company_address_service),
 ) -> CompanyAddressOut:
-    return service.get(address_id)
+    return await service.get(address_id)
 
 
 @router.put(
     "/{address_id}", response_model=CompanyAddressOut, dependencies=[_manage_jobs]
 )
-def update_company_address(
+async def update_company_address(
     address_id: uuid.UUID,
     payload: CompanyAddressUpdate,
     service: CompanyAddressService = Depends(get_company_address_service),
 ) -> CompanyAddressOut:
-    return service.update(address_id, **payload.model_dump())
+    return await service.update(address_id, **payload.model_dump())
 
 
 @router.delete(
@@ -60,8 +72,8 @@ def update_company_address(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[_manage_jobs],
 )
-def delete_company_address(
+async def delete_company_address(
     address_id: uuid.UUID,
     service: CompanyAddressService = Depends(get_company_address_service),
 ) -> None:
-    service.delete(address_id)
+    await service.delete(address_id)

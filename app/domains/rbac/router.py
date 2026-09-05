@@ -12,36 +12,38 @@ router = APIRouter(
 
 
 @router.get("/roles", response_model=list[RoleOut])
-def list_roles(rbac_service: RBACService = Depends(get_rbac_service)) -> list[RoleOut]:
-    return rbac_service.list_roles()
+async def list_roles(
+    rbac_service: RBACService = Depends(get_rbac_service),
+) -> list[RoleOut]:
+    return await rbac_service.list_roles()
 
 
 @router.get("/permissions", response_model=list[PermissionOut])
-def list_permissions(
+async def list_permissions(
     rbac_service: RBACService = Depends(get_rbac_service),
 ) -> list[PermissionOut]:
-    return rbac_service.list_permissions()
+    return await rbac_service.list_permissions()
 
 
 @router.post(
     "/roles/{role_name}/permissions/{permission_key}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def grant_permission(
+async def grant_permission(
     role_name: str,
     permission_key: str,
     rbac_service: RBACService = Depends(get_rbac_service),
 ) -> None:
-    rbac_service.grant(role_name, permission_key)
+    await rbac_service.grant(role_name, permission_key)
 
 
 @router.delete(
     "/roles/{role_name}/permissions/{permission_key}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def revoke_permission(
+async def revoke_permission(
     role_name: str,
     permission_key: str,
     rbac_service: RBACService = Depends(get_rbac_service),
 ) -> None:
-    rbac_service.revoke(role_name, permission_key)
+    await rbac_service.revoke(role_name, permission_key)

@@ -10,7 +10,7 @@ class CompanyAddressRepository(
 ):
     model = CompanyAddressModel
 
-    def _to_entity(self, obj: CompanyAddressModel) -> entities.CompanyAddress:
+    async def _to_entity(self, obj: CompanyAddressModel) -> entities.CompanyAddress:
         return entities.CompanyAddress(
             id=obj.id,
             label=obj.label,
@@ -40,8 +40,8 @@ class CompanyAddressRepository(
             longitude=entity.longitude,
         )
 
-    def update(self, entity: entities.CompanyAddress) -> None:
-        obj = self.db.get(CompanyAddressModel, entity.id)
+    async def update(self, entity: entities.CompanyAddress) -> None:
+        obj = await self.db.get(CompanyAddressModel, entity.id)
         if obj is None:
             return
         obj.label = entity.label

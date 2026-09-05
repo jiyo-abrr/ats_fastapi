@@ -30,32 +30,34 @@ class JobPostService:
         self.tags = tags
         self.uow = uow
 
-    def _require_position(self, position_id: uuid.UUID) -> position_entities.Position:
-        position = self.positions.get_by_id(position_id)
+    async def _require_position(
+        self, position_id: uuid.UUID
+    ) -> position_entities.Position:
+        position = await self.positions.get_by_id(position_id)
         if position is None:
             raise PositionNotFoundError(f"Position '{position_id}' not found")
         return position
 
-    def _require_address(
+    async def _require_address(
         self, company_address_id: uuid.UUID
     ) -> address_entities.CompanyAddress:
-        address = self.addresses.get_by_id(company_address_id)
+        address = await self.addresses.get_by_id(company_address_id)
         if address is None:
             raise CompanyAddressNotFoundError(
                 f"Company address '{company_address_id}' not found"
             )
         return address
 
-    def get(self, job_post_id: uuid.UUID) -> entities.JobPost:
-        job_post = self.job_posts.get_by_id(job_post_id)
+    async def get(self, job_post_id: uuid.UUID) -> entities.JobPost:
+        job_post = await self.job_posts.get_by_id(job_post_id)
         if job_post is None:
             raise JobPostNotFoundError(f"Job post '{job_post_id}' not found")
         return job_post
 
-    def list(self) -> list[entities.JobPost]:
-        return self.job_posts.list_all()
+    async def list(self) -> list[entities.JobPost]:
+        return await self.job_posts.list_all()
 
-    def create(
+    async def create(
         self,
         *,
         job_title: str,
@@ -71,16 +73,16 @@ class JobPostService:
         tag_ids: list[uuid.UUID],
         excluded_job_post_ids: list[uuid.UUID],
     ) -> entities.JobPost:
-        address = self._require_address(company_address_id)
-        position = self._require_position(position_id)
+        address = await self._require_address(company_address_id)
+        position = await self._require_position(position_id)
         for tag_id in tag_ids:
-            if self.tags.get_by_id(tag_id) is None:
+            if await self.tags.get_by_id(tag_id) is None:
                 raise TagNotFoundError(f"Tag '{tag_id}' not found")
         for excluded_id in excluded_job_post_ids:
-            self.get(excluded_id)
+            await self.get(excluded_id)
 
         job_post_id = uuid.uuid4()
-        self.job_posts.add(
+        await self.job_posts.add(
             entities.JobPost(
                 id=job_post_id,
                 job_title=job_title,
@@ -100,17 +102,17 @@ class JobPostService:
         # Flush before staging tag/exclusion rows: they reference job_posts.id
         # by plain FK (no ORM relationship), so SQLAlchemy won't otherwise know
         # to order the JobPost INSERT before them within the same flush.
-        self.uow.flush()
+        await self.uow.flush()
 
         for tag_id in tag_ids:
-            self.job_posts.add_tag(job_post_id, tag_id)
+            await self.job_posts.add_tag(job_post_id, tag_id)
         for excluded_id in excluded_job_post_ids:
-            self.job_posts.add_exclusion(job_post_id, excluded_id)
+            await self.job_posts.add_exclusion(job_post_id, excluded_id)
 
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
 
-    def update(
+    async def update(
         self,
         job_post_id: uuid.UUID,
         *,
@@ -125,11 +127,11 @@ class JobPostService:
         company_address_id: uuid.UUID,
         position_id: uuid.UUID,
     ) -> entities.JobPost:
-        self.get(job_post_id)
-        address = self._require_address(company_address_id)
-        position = self._require_position(position_id)
+        await self.get(job_post_id)
+        address = await self._require_address(company_address_id)
+        position = await self._require_position(position_id)
 
-        self.job_posts.update(
+        await self.job_posts.update(
             entities.JobPost(
                 id=job_post_id,
                 job_title=job_title,
@@ -146,43 +148,45 @@ class JobPostService:
                 position_title=position.title,
             )
         )
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
 
-    def delete(self, job_post_id: uuid.UUID) -> None:
-        self.get(job_post_id)
-        self.job_posts.delete(job_post_id)
-        self.uow.commit()
+    async def delete(self, job_post_id: uuid.UUID) -> None:
+        await self.get(job_post_id)
+        await self.job_posts.delete(job_post_id)
+        await self.uow.commit()
 
-    def add_tag(self, job_post_id: uuid.UUID, tag_id: uuid.UUID) -> entities.JobPost:
-        self.get(job_post_id)
-        if self.tags.get_by_id(tag_id) is None:
-            raise TagNotFoundError(f"Tag '{tag_id}' not found")
-        self.job_posts.add_tag(job_post_id, tag_id)
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
-
-    def remove_tag(
+    async def add_tag(
         self, job_post_id: uuid.UUID, tag_id: uuid.UUID
     ) -> entities.JobPost:
-        self.get(job_post_id)
-        self.job_posts.remove_tag(job_post_id, tag_id)
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
+        await self.get(job_post_id)
+        if await self.tags.get_by_id(tag_id) is None:
+            raise TagNotFoundError(f"Tag '{tag_id}' not found")
+        await self.job_posts.add_tag(job_post_id, tag_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
 
-    def add_exclusion(
+    async def remove_tag(
+        self, job_post_id: uuid.UUID, tag_id: uuid.UUID
+    ) -> entities.JobPost:
+        await self.get(job_post_id)
+        await self.job_posts.remove_tag(job_post_id, tag_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
+
+    async def add_exclusion(
         self, job_post_id: uuid.UUID, excluded_job_post_id: uuid.UUID
     ) -> entities.JobPost:
-        self.get(job_post_id)
-        self.get(excluded_job_post_id)
-        self.job_posts.add_exclusion(job_post_id, excluded_job_post_id)
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
+        await self.get(job_post_id)
+        await self.get(excluded_job_post_id)
+        await self.job_posts.add_exclusion(job_post_id, excluded_job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)
 
-    def remove_exclusion(
+    async def remove_exclusion(
         self, job_post_id: uuid.UUID, excluded_job_post_id: uuid.UUID
     ) -> entities.JobPost:
-        self.get(job_post_id)
-        self.job_posts.remove_exclusion(job_post_id, excluded_job_post_id)
-        self.uow.commit()
-        return self.job_posts.get_by_id(job_post_id)
+        await self.get(job_post_id)
+        await self.job_posts.remove_exclusion(job_post_id, excluded_job_post_id)
+        await self.uow.commit()
+        return await self.job_posts.get_by_id(job_post_id)

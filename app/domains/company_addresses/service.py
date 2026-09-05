@@ -17,7 +17,7 @@ class CompanyAddressService:
         self.addresses = addresses
         self.uow = uow
 
-    def create(
+    async def create(
         self,
         *,
         label: str,
@@ -31,7 +31,7 @@ class CompanyAddressService:
         longitude: Decimal | None,
     ) -> entities.CompanyAddress:
         address_id = uuid.uuid4()
-        self.addresses.add(
+        await self.addresses.add(
             entities.CompanyAddress(
                 id=address_id,
                 label=label,
@@ -45,21 +45,21 @@ class CompanyAddressService:
                 longitude=longitude,
             )
         )
-        self.uow.commit()
-        return self.addresses.get_by_id(address_id)
+        await self.uow.commit()
+        return await self.addresses.get_by_id(address_id)
 
-    def get(self, address_id: uuid.UUID) -> entities.CompanyAddress:
-        address = self.addresses.get_by_id(address_id)
+    async def get(self, address_id: uuid.UUID) -> entities.CompanyAddress:
+        address = await self.addresses.get_by_id(address_id)
         if address is None:
             raise CompanyAddressNotFoundError(
                 f"Company address '{address_id}' not found"
             )
         return address
 
-    def list(self) -> list[entities.CompanyAddress]:
-        return self.addresses.list_all()
+    async def list(self) -> list[entities.CompanyAddress]:
+        return await self.addresses.list_all()
 
-    def update(
+    async def update(
         self,
         address_id: uuid.UUID,
         *,
@@ -73,8 +73,8 @@ class CompanyAddressService:
         latitude: Decimal | None,
         longitude: Decimal | None,
     ) -> entities.CompanyAddress:
-        self.get(address_id)
-        self.addresses.update(
+        await self.get(address_id)
+        await self.addresses.update(
             entities.CompanyAddress(
                 id=address_id,
                 label=label,
@@ -88,16 +88,16 @@ class CompanyAddressService:
                 longitude=longitude,
             )
         )
-        self.uow.commit()
-        return self.addresses.get_by_id(address_id)
+        await self.uow.commit()
+        return await self.addresses.get_by_id(address_id)
 
-    def delete(self, address_id: uuid.UUID) -> None:
-        self.get(address_id)
-        self.addresses.delete(address_id)
+    async def delete(self, address_id: uuid.UUID) -> None:
+        await self.get(address_id)
+        await self.addresses.delete(address_id)
         try:
-            self.uow.commit()
+            await self.uow.commit()
         except IntegrityError:
-            self.uow.rollback()
+            await self.uow.rollback()
             raise CompanyAddressInUseError(
                 f"Company address '{address_id}' is still referenced by one or "
                 "more job posts"

@@ -1,5 +1,5 @@
 from fastapi import Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.unit_of_work import UnitOfWork, get_unit_of_work
@@ -13,7 +13,7 @@ from app.domains.tags.dependencies import get_tag_repository
 from app.domains.tags.repository import TagRepository
 
 
-def get_job_post_repository(db: Session = Depends(get_db)) -> JobPostRepository:
+def get_job_post_repository(db: AsyncSession = Depends(get_db)) -> JobPostRepository:
     return JobPostRepository(db)
 
 

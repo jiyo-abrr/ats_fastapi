@@ -21,38 +21,42 @@ class RBACService:
         self.role_permissions = role_permissions
         self.uow = uow
 
-    def list_roles(self) -> list[RoleOut]:
-        return [
-            RoleOut(
-                id=role.id,
-                name=role.name,
-                description=role.description,
-                permissions=[
-                    PermissionOut.model_validate(p)
-                    for p in self.role_permissions.list_for_role(role.id)
-                ],
+    async def list_roles(self) -> list[RoleOut]:
+        roles = await self.roles.list_all()
+        result = []
+        for role in roles:
+            permissions = await self.role_permissions.list_for_role(role.id)
+            result.append(
+                RoleOut(
+                    id=role.id,
+                    name=role.name,
+                    description=role.description,
+                    permissions=[
+                        PermissionOut.model_validate(p) for p in permissions
+                    ],
+                )
             )
-            for role in self.roles.list_all()
-        ]
+        return result
 
-    def list_permissions(self) -> list[PermissionOut]:
-        return [PermissionOut.model_validate(p) for p in self.permissions.list_all()]
+    async def list_permissions(self) -> list[PermissionOut]:
+        permissions = await self.permissions.list_all()
+        return [PermissionOut.model_validate(p) for p in permissions]
 
-    def grant(self, role_name: str, permission_key: str) -> None:
-        role, permission = self._resolve(role_name, permission_key)
-        self.role_permissions.grant(role.id, permission.id)
-        self.uow.commit()
+    async def grant(self, role_name: str, permission_key: str) -> None:
+        role, permission = await self._resolve(role_name, permission_key)
+        await self.role_permissions.grant(role.id, permission.id)
+        await self.uow.commit()
 
-    def revoke(self, role_name: str, permission_key: str) -> None:
-        role, permission = self._resolve(role_name, permission_key)
-        self.role_permissions.revoke(role.id, permission.id)
-        self.uow.commit()
+    async def revoke(self, role_name: str, permission_key: str) -> None:
+        role, permission = await self._resolve(role_name, permission_key)
+        await self.role_permissions.revoke(role.id, permission.id)
+        await self.uow.commit()
 
-    def _resolve(self, role_name: str, permission_key: str):
-        role = self.roles.get_by_name(role_name)
+    async def _resolve(self, role_name: str, permission_key: str):
+        role = await self.roles.get_by_name(role_name)
         if role is None:
             raise RoleNotFoundError(f"Role '{role_name}' not found")
-        permission = self.permissions.get_by_key(permission_key)
+        permission = await self.permissions.get_by_key(permission_key)
         if permission is None:
             raise PermissionNotFoundError(f"Permission '{permission_key}' not found")
         return role, permission

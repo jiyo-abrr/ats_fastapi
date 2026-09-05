@@ -36,7 +36,7 @@ async def signup(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SignupResponse:
     resume_bytes = await resume.read()
-    return auth_service.signup(
+    return await auth_service.signup(
         first_name=first_name,
         middle_initial=middle_initial,
         last_name=last_name,
@@ -55,11 +55,11 @@ async def signup(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("manage_hr_accounts"))],
 )
-def create_hr_account(
+async def create_hr_account(
     payload: CreateHrAccountRequest,
     auth_service: AuthService = Depends(get_auth_service),
 ) -> UserOut:
-    return auth_service.create_hr_account(
+    return await auth_service.create_hr_account(
         first_name=payload.first_name,
         middle_initial=payload.middle_initial,
         last_name=payload.last_name,
@@ -74,26 +74,26 @@ def create_hr_account(
     response_model=TokenResponse,
     dependencies=[Depends(rate_limit("login", limit=5, window_seconds=60))],
 )
-def login(
+async def login(
     payload: LoginRequest, auth_service: AuthService = Depends(get_auth_service)
 ) -> TokenResponse:
-    return auth_service.login(payload.email, payload.password)
+    return await auth_service.login(payload.email, payload.password)
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)
-def refresh(
+async def refresh(
     payload: RefreshRequest, auth_service: AuthService = Depends(get_auth_service)
 ) -> AccessTokenResponse:
-    return auth_service.refresh(payload.refresh_token)
+    return await auth_service.refresh(payload.refresh_token)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(
+async def logout(
     payload: RefreshRequest, auth_service: AuthService = Depends(get_auth_service)
 ) -> None:
-    auth_service.logout(payload.refresh_token)
+    await auth_service.logout(payload.refresh_token)
 
 
 @router.get("/me", response_model=UserOut)
-def me(current_user: entities.User = Depends(get_current_user)) -> UserOut:
+async def me(current_user: entities.User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)

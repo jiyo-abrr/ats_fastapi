@@ -1,8 +1,18 @@
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.positions.dependencies import get_position_service
+from app.core.database import get_db
+from app.domains.positions.dependencies import (
+    get_position_repository,
+    get_position_service,
+)
+from app.domains.positions.models import Position as PositionModel
+from app.domains.positions.repository import PositionRepository
 from app.domains.positions.schemas import PositionCreate, PositionOut, PositionUpdate
 from app.domains.positions.service import PositionService
 from app.domains.rbac.dependencies import require_permission
@@ -18,35 +28,37 @@ router = APIRouter(prefix="/positions", tags=["positions"])
     status_code=status.HTTP_201_CREATED,
     dependencies=[_manage_jobs],
 )
-def create_position(
+async def create_position(
     payload: PositionCreate,
     service: PositionService = Depends(get_position_service),
 ) -> PositionOut:
-    return service.create(**payload.model_dump())
+    return await service.create(**payload.model_dump())
 
 
-@router.get("", response_model=list[PositionOut])
-def list_positions(
-    service: PositionService = Depends(get_position_service),
-) -> list[PositionOut]:
-    return service.list()
+@router.get("", response_model=Page[PositionOut])
+async def list_positions(
+    query=QueryBuilder(PositionModel),
+    db: AsyncSession = Depends(get_db),
+    repo: PositionRepository = Depends(get_position_repository),
+) -> Page[PositionOut]:
+    return await apaginate(db, query, transformer=repo.map_many)
 
 
 @router.get("/{position_id}", response_model=PositionOut)
-def get_position(
+async def get_position(
     position_id: uuid.UUID,
     service: PositionService = Depends(get_position_service),
 ) -> PositionOut:
-    return service.get(position_id)
+    return await service.get(position_id)
 
 
 @router.put("/{position_id}", response_model=PositionOut, dependencies=[_manage_jobs])
-def update_position(
+async def update_position(
     position_id: uuid.UUID,
     payload: PositionUpdate,
     service: PositionService = Depends(get_position_service),
 ) -> PositionOut:
-    return service.update(position_id, **payload.model_dump())
+    return await service.update(position_id, **payload.model_dump())
 
 
 @router.delete(
@@ -54,8 +66,8 @@ def update_position(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[_manage_jobs],
 )
-def delete_position(
+async def delete_position(
     position_id: uuid.UUID,
     service: PositionService = Depends(get_position_service),
 ) -> None:
-    service.delete(position_id)
+    await service.delete(position_id)
