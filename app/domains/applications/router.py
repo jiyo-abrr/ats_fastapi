@@ -6,12 +6,8 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.domains.applications.dependencies import (
-    get_application_repository,
-    get_application_service,
-)
+from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.repository import ApplicationRepository
 from app.domains.applications.schemas import (
     ApplicationCreate,
     ApplicationOut,
@@ -44,9 +40,9 @@ async def create_application(
 async def list_my_applications(
     current_user: auth_entities.User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    repo: ApplicationRepository = Depends(get_application_repository),
+    service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationSummaryOut]:
-    query = await repo.list_for_applicant(current_user.id)
+    query = await service.list_for_applicant(current_user.id)
     return await apaginate(
         db,
         query,
@@ -65,9 +61,9 @@ async def list_applications(
     job_post_id: uuid.UUID | None = None,
     status: ApplicationStatus | None = None,
     db: AsyncSession = Depends(get_db),
-    repo: ApplicationRepository = Depends(get_application_repository),
+    service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationReviewOut]:
-    query = await repo.list_for_review(job_post_id=job_post_id, status=status)
+    query = await service.list_for_review(job_post_id=job_post_id, status=status)
     return await apaginate(
         db,
         query,

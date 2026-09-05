@@ -1,5 +1,6 @@
 import uuid
 
+from sqlalchemy import Select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.unit_of_work import UnitOfWork
@@ -95,6 +96,21 @@ class ApplicationService:
                 f"You already have an active application for job post '{job_post_id}'"
             ) from None
         return await self.applications.get_by_id(application_id)
+
+    # Thin pass-throughs to the repository's projection queries — kept here
+    # (rather than the router calling ApplicationRepository directly) so the
+    # router only ever depends on the service, never the repository. The
+    # queries themselves stay in the repository; there's no business logic
+    # to add here, this is purely a layering boundary.
+    async def list_for_review(
+        self, *, job_post_id: uuid.UUID | None, status: str | None
+    ) -> Select:
+        return await self.applications.list_for_review(
+            job_post_id=job_post_id, status=status
+        )
+
+    async def list_for_applicant(self, applicant_id: uuid.UUID) -> Select:
+        return await self.applications.list_for_applicant(applicant_id)
 
     async def get(
         self, application_id: uuid.UUID, current_user: auth_entities.User
