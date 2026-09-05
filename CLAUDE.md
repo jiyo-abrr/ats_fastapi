@@ -42,9 +42,6 @@ When adding a new domain (e.g. `jobs`, `applications`), mirror this structure un
 - Auth design: access + refresh JWTs (see `app/core/security.py`), passwords hashed with `bcrypt` directly (not `passlib`). No email verification yet.
 - Refresh-token revocation: every JWT carries a `jti`. `POST /auth/logout` records the refresh token's `jti` + expiry in the `revoked_refresh_tokens` table (`app/domains/auth/models.py`); `POST /auth/refresh` rejects any token whose `jti` is in that table. Access tokens are NOT revocable (they just expire — 30 min default) — only refresh tokens are checked against the denylist. There's no cleanup job for expired rows in that table yet.
 
-## Git scope (important)
+## Git
 
-This directory (`rd/ats_fastapi`) is nested inside a much larger personal git repository rooted at `D:/devjiyo` that also contains many unrelated, unversioned-together projects (games, freelance work, ML experiments, etc.). There is no repo-level `.gitignore` for this project.
-
-- When staging or committing, target files under `rd/ats_fastapi/` explicitly — never run a blanket `git add -A` or `git add .` from the repo root.
-- Before any commit, review `git status` output carefully since it will show changes across unrelated projects too.
+`rd/ats_fastapi` is its own standalone git repository (`main` branch) — it is not part of the larger `D:/devjiyo` repo it happens to live under. The parent repo's `.gitignore` excludes `rd/ats_fastapi/` entirely, so nothing here is ever picked up by a `git status`/`git add` run from the parent. No remote is configured yet.
