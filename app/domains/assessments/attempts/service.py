@@ -6,25 +6,27 @@ from app.core.question_types import validate_answer_value
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.repository import ApplicationRepository
-from app.domains.assessments import entities
-from app.domains.assessments.enums import AttemptStatus, TemplateType
-from app.domains.assessments.exceptions import (
+from app.domains.assessments.attempts import entities
+from app.domains.assessments.attempts.enums import AttemptStatus, TemplateType
+from app.domains.assessments.attempts.exceptions import (
     AssessmentAttemptAlreadyCompletedError,
     AssessmentAttemptExpiredError,
     AssessmentAttemptNotFoundError,
     InvalidAssessmentAttemptReopenError,
     NotCurrentQuestionError,
 )
-from app.domains.assessments.repository import AssessmentAttemptRepository
-from app.domains.auth import entities as auth_entities
-from app.domains.culture_fit_templates.repository import CultureFitTemplateRepository
-from app.domains.job_posts.repository import JobPostRepository
-from app.domains.pre_assessment_templates.repository import (
+from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
+from app.domains.assessments.culture_fit_templates.repository import (
+    CultureFitTemplateRepository,
+)
+from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
-from app.domains.technical_assessment_templates.repository import (
+from app.domains.assessments.technical_assessment_templates.repository import (
     TechnicalAssessmentTemplateRepository,
 )
+from app.domains.auth import entities as auth_entities
+from app.domains.job_posts.repository import JobPostRepository
 
 
 class AssessmentService:
@@ -54,6 +56,18 @@ class AssessmentService:
         which of the 3 independent domains it belongs to."""
         repo = self._template_repos[TemplateType(template_type)]
         return await repo.get_by_id(template_id)
+
+    async def _with_total_questions(
+        self, attempt: entities.AssessmentAttempt
+    ) -> entities.AssessmentAttempt:
+        """Populate `total_questions` from the attempt's template — called on
+        every attempt returned to a router (list + submit + reopen), so the
+        frontend gets progress without a gated template fetch."""
+        template = await self._get_template(
+            attempt.template_type, attempt.template_id
+        )
+        attempt.total_questions = len(template.questions) if template else 0
+        return attempt
 
     async def create_attempts_for_application(
         self, application_id: uuid.UUID, job_post_id: uuid.UUID
@@ -228,7 +242,9 @@ class AssessmentService:
             await self.attempts.complete_attempt(attempt_id, now)
 
         await self.uow.commit()
-        return await self.attempts.get_by_id(attempt_id)
+        return await self._with_total_questions(
+            await self.attempts.get_by_id(attempt_id)
+        )
 
     async def reopen(
         self, attempt_id: uuid.UUID, *, reason: str, current_user: auth_entities.User
@@ -265,7 +281,9 @@ class AssessmentService:
             )
         )
         await self.uow.commit()
-        return await self.attempts.get_by_id(attempt_id)
+        return await self._with_total_questions(
+            await self.attempts.get_by_id(attempt_id)
+        )
 
     async def expire_overdue_attempts(self) -> list[uuid.UUID]:
         """Layer 2 sweep — called by the scheduled job, never a router."""
@@ -287,4 +305,35 @@ class AssessmentService:
     async def list_for_application(
         self, application_id: uuid.UUID
     ) -> list[entities.AssessmentAttempt]:
-        return await self.attempts.list_for_application(application_id)
+        attempts = await self.attempts.list_for_application(application_id)
+        for attempt in attempts:
+            await self._with_total_questions(attempt)
+        return attempts
+
+    async def get_attempt_detail(
+        self, attempt_id: uuid.UUID, current_user: auth_entities.User
+    ) -> entities.AttemptDetail:
+        """Read-only view for the attempt owner (applicant). Pure — never
+        applies layer-2 expiry (that stays a side effect of start/submit);
+        surfaces only the current question, matching the sequential rule."""
+        attempt = await self._require_owned_attempt(attempt_id, current_user)
+        template = await self._get_template(
+            attempt.template_type, attempt.template_id
+        )
+        now = datetime.now(UTC)
+        answers = await self.attempts.list_live_answers(attempt_id)
+        answers_by_question = {a.question_id: a for a in answers}
+        answered_count = sum(1 for a in answers if a.answer_value is not None)
+        current_question, current_answer = self._compute_current_question(
+            template.questions, answers_by_question, now
+        )
+        return entities.AttemptDetail(
+            attempt=attempt,
+            template_title=template.title,
+            template_instructions=template.instructions,
+            time_limit_minutes=template.time_limit_minutes,
+            total_questions=len(template.questions),
+            answered_count=answered_count,
+            current_question=current_question,
+            current_answer=current_answer,
+        )

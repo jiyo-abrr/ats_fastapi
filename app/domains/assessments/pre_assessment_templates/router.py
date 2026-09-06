@@ -2,16 +2,18 @@ import uuid
 
 from fastapi import APIRouter, Depends, status
 
-from app.domains.pre_assessment_templates.dependencies import (
+from app.domains.assessments.pre_assessment_templates.dependencies import (
     get_pre_assessment_template_service,
 )
-from app.domains.pre_assessment_templates.schemas import (
+from app.domains.assessments.pre_assessment_templates.schemas import (
     PreAssessmentQuestionCreate,
     PreAssessmentTemplateCreate,
     PreAssessmentTemplateOut,
     PreAssessmentTemplateUpdate,
 )
-from app.domains.pre_assessment_templates.service import PreAssessmentTemplateService
+from app.domains.assessments.pre_assessment_templates.service import (
+    PreAssessmentTemplateService,
+)
 from app.domains.rbac.dependencies import require_permission
 
 # Unlike positions/tags/company_addresses/job_posts, reads here are also

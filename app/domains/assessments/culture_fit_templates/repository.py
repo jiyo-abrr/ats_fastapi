@@ -3,11 +3,11 @@ import uuid
 from sqlalchemy import select
 
 from app.core.repository import BaseRepository
-from app.domains.culture_fit_templates import entities
-from app.domains.culture_fit_templates.models import (
+from app.domains.assessments.culture_fit_templates import entities
+from app.domains.assessments.culture_fit_templates.models import (
     CultureFitQuestion as CultureFitQuestionModel,
 )
-from app.domains.culture_fit_templates.models import (
+from app.domains.assessments.culture_fit_templates.models import (
     CultureFitTemplate as CultureFitTemplateModel,
 )
 

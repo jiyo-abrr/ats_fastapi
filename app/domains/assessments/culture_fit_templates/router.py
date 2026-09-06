@@ -2,16 +2,18 @@ import uuid
 
 from fastapi import APIRouter, Depends, status
 
-from app.domains.culture_fit_templates.dependencies import (
+from app.domains.assessments.culture_fit_templates.dependencies import (
     get_culture_fit_template_service,
 )
-from app.domains.culture_fit_templates.schemas import (
+from app.domains.assessments.culture_fit_templates.schemas import (
     CultureFitQuestionCreate,
     CultureFitTemplateCreate,
     CultureFitTemplateOut,
     CultureFitTemplateUpdate,
 )
-from app.domains.culture_fit_templates.service import CultureFitTemplateService
+from app.domains.assessments.culture_fit_templates.service import (
+    CultureFitTemplateService,
+)
 from app.domains.rbac.dependencies import require_permission
 
 # Unlike positions/tags/company_addresses/job_posts, reads here are also

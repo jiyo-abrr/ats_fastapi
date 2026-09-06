@@ -4,12 +4,14 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.question_types import validate_question_config
 from app.core.unit_of_work import UnitOfWork
-from app.domains.culture_fit_templates import entities
-from app.domains.culture_fit_templates.exceptions import (
+from app.domains.assessments.culture_fit_templates import entities
+from app.domains.assessments.culture_fit_templates.exceptions import (
     CultureFitTemplateInUseError,
     CultureFitTemplateNotFoundError,
 )
-from app.domains.culture_fit_templates.repository import CultureFitTemplateRepository
+from app.domains.assessments.culture_fit_templates.repository import (
+    CultureFitTemplateRepository,
+)
 
 
 class CultureFitTemplateService:

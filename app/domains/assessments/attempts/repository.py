@@ -4,20 +4,24 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from app.core.repository import BaseRepository
-from app.domains.assessments import entities
-from app.domains.assessments.enums import TemplateType
-from app.domains.assessments.models import AssessmentAnswer as AssessmentAnswerModel
-from app.domains.assessments.models import AssessmentAttempt as AssessmentAttemptModel
-from app.domains.assessments.models import (
+from app.domains.assessments.attempts import entities
+from app.domains.assessments.attempts.enums import TemplateType
+from app.domains.assessments.attempts.models import (
+    AssessmentAnswer as AssessmentAnswerModel,
+)
+from app.domains.assessments.attempts.models import (
+    AssessmentAttempt as AssessmentAttemptModel,
+)
+from app.domains.assessments.attempts.models import (
     AssessmentAttemptReopen as AssessmentAttemptReopenModel,
 )
-from app.domains.culture_fit_templates.models import (
+from app.domains.assessments.culture_fit_templates.models import (
     CultureFitTemplate as CultureFitTemplateModel,
 )
-from app.domains.pre_assessment_templates.models import (
+from app.domains.assessments.pre_assessment_templates.models import (
     PreAssessmentTemplate as PreAssessmentTemplateModel,
 )
-from app.domains.technical_assessment_templates.models import (
+from app.domains.assessments.technical_assessment_templates.models import (
     TechnicalAssessmentTemplate as TechnicalAssessmentTemplateModel,
 )
 

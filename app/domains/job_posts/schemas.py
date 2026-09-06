@@ -22,6 +22,9 @@ class JobPostCreate(BaseModel):
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = Field(default_factory=list)
     assessment_window_days: int = 4
+    pre_assessment_template_id: uuid.UUID | None = None
+    culture_fit_template_id: uuid.UUID | None = None
+    technical_assessment_template_id: uuid.UUID | None = None
 
 
 class JobPostUpdate(BaseModel):
@@ -36,6 +39,13 @@ class JobPostUpdate(BaseModel):
     company_address_id: uuid.UUID
     position_id: uuid.UUID
     assessment_window_days: int = 4
+
+
+class JobPostStatsOut(BaseModel):
+    """GET /job-posts/stats — draft/published/closed tally for the ATS dashboard."""
+
+    by_status: dict[str, int]
+    total: int
 
 
 class JobPostOut(BaseModel):

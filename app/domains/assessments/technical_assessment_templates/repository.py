@@ -3,26 +3,28 @@ import uuid
 from sqlalchemy import select
 
 from app.core.repository import BaseRepository
-from app.domains.pre_assessment_templates import entities
-from app.domains.pre_assessment_templates.models import (
-    PreAssessmentQuestion as PreAssessmentQuestionModel,
+from app.domains.assessments.technical_assessment_templates import entities
+from app.domains.assessments.technical_assessment_templates.models import (
+    TechnicalAssessmentQuestion as TechnicalAssessmentQuestionModel,
 )
-from app.domains.pre_assessment_templates.models import (
-    PreAssessmentTemplate as PreAssessmentTemplateModel,
+from app.domains.assessments.technical_assessment_templates.models import (
+    TechnicalAssessmentTemplate as TechnicalAssessmentTemplateModel,
 )
 
 
-class PreAssessmentTemplateRepository(
+class TechnicalAssessmentTemplateRepository(
     BaseRepository[
-        PreAssessmentTemplateModel, entities.PreAssessmentTemplate, uuid.UUID
+        TechnicalAssessmentTemplateModel,
+        entities.TechnicalAssessmentTemplate,
+        uuid.UUID,
     ]
 ):
-    model = PreAssessmentTemplateModel
+    model = TechnicalAssessmentTemplateModel
 
     async def _to_entity(
-        self, obj: PreAssessmentTemplateModel
-    ) -> entities.PreAssessmentTemplate:
-        return entities.PreAssessmentTemplate(
+        self, obj: TechnicalAssessmentTemplateModel
+    ) -> entities.TechnicalAssessmentTemplate:
+        return entities.TechnicalAssessmentTemplate(
             id=obj.id,
             title=obj.title,
             description=obj.description,
@@ -34,9 +36,9 @@ class PreAssessmentTemplateRepository(
         )
 
     def _to_model(
-        self, entity: entities.PreAssessmentTemplate
-    ) -> PreAssessmentTemplateModel:
-        return PreAssessmentTemplateModel(
+        self, entity: entities.TechnicalAssessmentTemplate
+    ) -> TechnicalAssessmentTemplateModel:
+        return TechnicalAssessmentTemplateModel(
             id=entity.id,
             title=entity.title,
             description=entity.description,
@@ -46,18 +48,18 @@ class PreAssessmentTemplateRepository(
 
     async def _get_questions(
         self, template_id: uuid.UUID
-    ) -> list[entities.PreAssessmentQuestion]:
+    ) -> list[entities.TechnicalAssessmentQuestion]:
         result = await self.db.execute(
-            select(PreAssessmentQuestionModel)
-            .where(PreAssessmentQuestionModel.template_id == template_id)
-            .order_by(PreAssessmentQuestionModel.order_index)
+            select(TechnicalAssessmentQuestionModel)
+            .where(TechnicalAssessmentQuestionModel.template_id == template_id)
+            .order_by(TechnicalAssessmentQuestionModel.order_index)
         )
         return [self._question_to_entity(row) for row in result.scalars().all()]
 
     def _question_to_entity(
-        self, obj: PreAssessmentQuestionModel
-    ) -> entities.PreAssessmentQuestion:
-        return entities.PreAssessmentQuestion(
+        self, obj: TechnicalAssessmentQuestionModel
+    ) -> entities.TechnicalAssessmentQuestion:
+        return entities.TechnicalAssessmentQuestion(
             id=obj.id,
             template_id=obj.template_id,
             order_index=obj.order_index,
@@ -68,8 +70,8 @@ class PreAssessmentTemplateRepository(
             time_limit_seconds=obj.time_limit_seconds,
         )
 
-    async def update(self, entity: entities.PreAssessmentTemplate) -> None:
-        obj = await self.db.get(PreAssessmentTemplateModel, entity.id)
+    async def update(self, entity: entities.TechnicalAssessmentTemplate) -> None:
+        obj = await self.db.get(TechnicalAssessmentTemplateModel, entity.id)
         if obj is None:
             return
         obj.title = entity.title
@@ -77,9 +79,11 @@ class PreAssessmentTemplateRepository(
         obj.instructions = entity.instructions
         obj.time_limit_minutes = entity.time_limit_minutes
 
-    async def add_question(self, question: entities.PreAssessmentQuestion) -> None:
+    async def add_question(
+        self, question: entities.TechnicalAssessmentQuestion
+    ) -> None:
         self.db.add(
-            PreAssessmentQuestionModel(
+            TechnicalAssessmentQuestionModel(
                 id=question.id,
                 template_id=question.template_id,
                 order_index=question.order_index,
@@ -93,6 +97,6 @@ class PreAssessmentTemplateRepository(
 
     async def get_question_by_id(
         self, question_id: uuid.UUID
-    ) -> entities.PreAssessmentQuestion | None:
-        obj = await self.db.get(PreAssessmentQuestionModel, question_id)
+    ) -> entities.TechnicalAssessmentQuestion | None:
+        obj = await self.db.get(TechnicalAssessmentQuestionModel, question_id)
         return self._question_to_entity(obj) if obj is not None else None

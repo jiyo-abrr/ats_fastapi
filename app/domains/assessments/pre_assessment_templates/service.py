@@ -4,20 +4,18 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.question_types import validate_question_config
 from app.core.unit_of_work import UnitOfWork
-from app.domains.technical_assessment_templates import entities
-from app.domains.technical_assessment_templates.exceptions import (
-    TechnicalAssessmentTemplateInUseError,
-    TechnicalAssessmentTemplateNotFoundError,
+from app.domains.assessments.pre_assessment_templates import entities
+from app.domains.assessments.pre_assessment_templates.exceptions import (
+    PreAssessmentTemplateInUseError,
+    PreAssessmentTemplateNotFoundError,
 )
-from app.domains.technical_assessment_templates.repository import (
-    TechnicalAssessmentTemplateRepository,
+from app.domains.assessments.pre_assessment_templates.repository import (
+    PreAssessmentTemplateRepository,
 )
 
 
-class TechnicalAssessmentTemplateService:
-    def __init__(
-        self, templates: TechnicalAssessmentTemplateRepository, uow: UnitOfWork
-    ):
+class PreAssessmentTemplateService:
+    def __init__(self, templates: PreAssessmentTemplateRepository, uow: UnitOfWork):
         self.templates = templates
         self.uow = uow
 
@@ -28,10 +26,10 @@ class TechnicalAssessmentTemplateService:
         description: str | None,
         instructions: str | None,
         time_limit_minutes: int | None,
-    ) -> entities.TechnicalAssessmentTemplate:
+    ) -> entities.PreAssessmentTemplate:
         template_id = uuid.uuid4()
         await self.templates.add(
-            entities.TechnicalAssessmentTemplate(
+            entities.PreAssessmentTemplate(
                 id=template_id,
                 title=title,
                 description=description,
@@ -42,17 +40,15 @@ class TechnicalAssessmentTemplateService:
         await self.uow.commit()
         return await self.templates.get_by_id(template_id)
 
-    async def get(
-        self, template_id: uuid.UUID
-    ) -> entities.TechnicalAssessmentTemplate:
+    async def get(self, template_id: uuid.UUID) -> entities.PreAssessmentTemplate:
         template = await self.templates.get_by_id(template_id)
         if template is None:
-            raise TechnicalAssessmentTemplateNotFoundError(
-                f"Technical assessment template '{template_id}' not found"
+            raise PreAssessmentTemplateNotFoundError(
+                f"Pre-assessment template '{template_id}' not found"
             )
         return template
 
-    async def list(self) -> list[entities.TechnicalAssessmentTemplate]:
+    async def list(self) -> list[entities.PreAssessmentTemplate]:
         return await self.templates.list_all()
 
     async def update(
@@ -63,10 +59,10 @@ class TechnicalAssessmentTemplateService:
         description: str | None,
         instructions: str | None,
         time_limit_minutes: int | None,
-    ) -> entities.TechnicalAssessmentTemplate:
+    ) -> entities.PreAssessmentTemplate:
         await self.get(template_id)
         await self.templates.update(
-            entities.TechnicalAssessmentTemplate(
+            entities.PreAssessmentTemplate(
                 id=template_id,
                 title=title,
                 description=description,
@@ -84,9 +80,9 @@ class TechnicalAssessmentTemplateService:
             await self.uow.commit()
         except IntegrityError:
             await self.uow.rollback()
-            raise TechnicalAssessmentTemplateInUseError(
-                f"Technical assessment template '{template_id}' is still "
-                "referenced by one or more job posts or assessment attempts"
+            raise PreAssessmentTemplateInUseError(
+                f"Pre-assessment template '{template_id}' is still referenced "
+                "by one or more job posts or assessment attempts"
             ) from None
 
     async def add_question(
@@ -99,11 +95,11 @@ class TechnicalAssessmentTemplateService:
         question_type: str,
         config: dict | None,
         time_limit_seconds: int | None,
-    ) -> entities.TechnicalAssessmentTemplate:
+    ) -> entities.PreAssessmentTemplate:
         await self.get(template_id)
         validate_question_config(question_type, config)
         await self.templates.add_question(
-            entities.TechnicalAssessmentQuestion(
+            entities.PreAssessmentQuestion(
                 id=uuid.uuid4(),
                 template_id=template_id,
                 order_index=order_index,

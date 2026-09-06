@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,15 +13,16 @@ from app.domains.applications.schemas import (
     ApplicationCreate,
     ApplicationOut,
     ApplicationReviewOut,
+    ApplicationStatsOut,
     ApplicationStatusUpdate,
     ApplicationSummaryOut,
     AssessmentDeadlineExtensionOut,
     ExtendAssessmentDeadlineRequest,
 )
 from app.domains.applications.service import ApplicationService
-from app.domains.assessments.dependencies import get_assessment_service
-from app.domains.assessments.schemas import AssessmentAttemptOut
-from app.domains.assessments.service import AssessmentService
+from app.domains.assessments.attempts.dependencies import get_assessment_service
+from app.domains.assessments.attempts.schemas import AssessmentAttemptOut
+from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
 from app.domains.rbac.dependencies import require_permission
@@ -54,11 +55,12 @@ async def create_application(
 
 @router.get("/me", response_model=Page[ApplicationSummaryOut])
 async def list_my_applications(
+    job_post_id: uuid.UUID | None = None,
     current_user: auth_entities.User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationSummaryOut]:
-    query = await service.list_for_applicant(current_user.id)
+    query = await service.list_for_applicant(current_user.id, job_post_id=job_post_id)
     return await apaginate(
         db,
         query,
@@ -66,6 +68,18 @@ async def list_my_applications(
             ApplicationSummaryOut.model_validate(r) for r in rows
         ],
     )
+
+
+@router.get(
+    "/stats",
+    response_model=ApplicationStatsOut,
+    dependencies=[_manage_applications],
+)
+async def application_stats(
+    job_post_id: uuid.UUID | None = None,
+    service: ApplicationService = Depends(get_application_service),
+) -> ApplicationStatsOut:
+    return ApplicationStatsOut(**await service.stats(job_post_id))
 
 
 @router.get(
@@ -94,6 +108,22 @@ async def get_application(
     service: ApplicationService = Depends(get_application_service),
 ) -> ApplicationOut:
     return await service.get(application_id, current_user)
+
+
+@router.get("/{application_id}/resume")
+async def download_resume(
+    application_id: uuid.UUID,
+    current_user: auth_entities.User = Depends(get_current_user),
+    service: ApplicationService = Depends(get_application_service),
+) -> Response:
+    data, content_type, filename = await service.get_resume(
+        application_id, current_user
+    )
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{application_id}/withdraw", response_model=ApplicationOut)

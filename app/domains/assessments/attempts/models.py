@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.domains.assessments.enums import AttemptStatus, TemplateType
+from app.domains.assessments.attempts.enums import AttemptStatus, TemplateType
 
 
 class AssessmentAttempt(Base):

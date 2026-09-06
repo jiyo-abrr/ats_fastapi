@@ -4,16 +4,18 @@ import selectors
 from app.core.database import AsyncSessionLocal
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.repository import ApplicationRepository
-from app.domains.assessments.repository import AssessmentAttemptRepository
-from app.domains.assessments.service import AssessmentService
-from app.domains.culture_fit_templates.repository import CultureFitTemplateRepository
-from app.domains.job_posts.repository import JobPostRepository
-from app.domains.pre_assessment_templates.repository import (
+from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
+from app.domains.assessments.attempts.service import AssessmentService
+from app.domains.assessments.culture_fit_templates.repository import (
+    CultureFitTemplateRepository,
+)
+from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
-from app.domains.technical_assessment_templates.repository import (
+from app.domains.assessments.technical_assessment_templates.repository import (
     TechnicalAssessmentTemplateRepository,
 )
+from app.domains.job_posts.repository import JobPostRepository
 
 # Layer-2 sweep — see docs/plans/assessments-domain.md. Independently
 # runnable (uv run python -m app.scripts.expire_overdue_assessment_attempts)

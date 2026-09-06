@@ -5,26 +5,28 @@ from app.core.database import get_db
 from app.core.unit_of_work import UnitOfWork, get_unit_of_work
 from app.domains.applications.dependencies import get_application_repository
 from app.domains.applications.repository import ApplicationRepository
-from app.domains.assessments.repository import AssessmentAttemptRepository
-from app.domains.assessments.service import AssessmentService
-from app.domains.culture_fit_templates.dependencies import (
+from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
+from app.domains.assessments.attempts.service import AssessmentService
+from app.domains.assessments.culture_fit_templates.dependencies import (
     get_culture_fit_template_repository,
 )
-from app.domains.culture_fit_templates.repository import CultureFitTemplateRepository
-from app.domains.job_posts.dependencies import get_job_post_repository
-from app.domains.job_posts.repository import JobPostRepository
-from app.domains.pre_assessment_templates.dependencies import (
+from app.domains.assessments.culture_fit_templates.repository import (
+    CultureFitTemplateRepository,
+)
+from app.domains.assessments.pre_assessment_templates.dependencies import (
     get_pre_assessment_template_repository,
 )
-from app.domains.pre_assessment_templates.repository import (
+from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
-from app.domains.technical_assessment_templates.dependencies import (
+from app.domains.assessments.technical_assessment_templates.dependencies import (
     get_technical_assessment_template_repository,
 )
-from app.domains.technical_assessment_templates.repository import (
+from app.domains.assessments.technical_assessment_templates.repository import (
     TechnicalAssessmentTemplateRepository,
 )
+from app.domains.job_posts.dependencies import get_job_post_repository
+from app.domains.job_posts.repository import JobPostRepository
 
 
 def get_assessment_attempt_repository(

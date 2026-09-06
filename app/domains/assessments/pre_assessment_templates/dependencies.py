@@ -3,10 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.unit_of_work import UnitOfWork, get_unit_of_work
-from app.domains.pre_assessment_templates.repository import (
+from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
-from app.domains.pre_assessment_templates.service import PreAssessmentTemplateService
+from app.domains.assessments.pre_assessment_templates.service import (
+    PreAssessmentTemplateService,
+)
 
 
 def get_pre_assessment_template_repository(

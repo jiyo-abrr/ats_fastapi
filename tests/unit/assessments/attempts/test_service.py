@@ -7,19 +7,19 @@ import pytest
 from app.core.question_types import InvalidAnswerValueError, QuestionType
 from app.domains.applications import entities as application_entities
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.assessments import entities
-from app.domains.assessments.enums import AttemptStatus, TemplateType
-from app.domains.assessments.exceptions import (
+from app.domains.assessments.attempts import entities
+from app.domains.assessments.attempts.enums import AttemptStatus, TemplateType
+from app.domains.assessments.attempts.exceptions import (
     AssessmentAttemptExpiredError,
     AssessmentAttemptNotFoundError,
     InvalidAssessmentAttemptReopenError,
     NotCurrentQuestionError,
 )
-from app.domains.assessments.service import AssessmentService
-from app.domains.auth import entities as auth_entities
-from app.domains.technical_assessment_templates import (
+from app.domains.assessments.attempts.service import AssessmentService
+from app.domains.assessments.technical_assessment_templates import (
     entities as technical_template_entities,
 )
+from app.domains.auth import entities as auth_entities
 
 
 def make_service():
@@ -374,3 +374,121 @@ class TestSchedulerHelpers:
         ]
 
         assert await service.is_application_fully_assessed(uuid.uuid4()) is True
+
+
+class TestGetAttemptDetail:
+    async def test_returns_first_question_as_current_when_not_started(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(application_id=uuid.uuid4())
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id, applicant_id=user.id
+        )
+        q1 = make_question(order_index=1)
+        q2 = make_question(order_index=2)
+        templates.get_by_id.return_value = make_template(
+            title="Tech", questions=[q1, q2]
+        )
+        attempts.list_live_answers.return_value = []
+
+        detail = await service.get_attempt_detail(attempt.id, user)
+
+        assert detail.total_questions == 2
+        assert detail.answered_count == 0
+        assert detail.current_question is q1
+        assert detail.current_answer is None
+        assert detail.template_title == "Tech"
+
+    async def test_skips_answered_questions_and_counts_them(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(
+            application_id=uuid.uuid4(), status=AttemptStatus.IN_PROGRESS
+        )
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id, applicant_id=user.id
+        )
+        q1 = make_question(order_index=1)
+        q2 = make_question(order_index=2)
+        templates.get_by_id.return_value = make_template(questions=[q1, q2])
+        attempts.list_live_answers.return_value = [
+            make_answer(question_id=q1.id, answer_value=4),
+        ]
+
+        detail = await service.get_attempt_detail(attempt.id, user)
+
+        assert detail.answered_count == 1
+        assert detail.current_question is q2
+
+    async def test_no_current_question_when_all_answered(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(application_id=uuid.uuid4())
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id, applicant_id=user.id
+        )
+        q1 = make_question(order_index=1)
+        templates.get_by_id.return_value = make_template(questions=[q1])
+        attempts.list_live_answers.return_value = [
+            make_answer(question_id=q1.id, answer_value=3),
+        ]
+
+        detail = await service.get_attempt_detail(attempt.id, user)
+
+        assert detail.current_question is None
+        assert detail.answered_count == 1
+
+    async def test_rejects_attempt_not_owned_by_user(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(application_id=uuid.uuid4())
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id, applicant_id=uuid.uuid4()
+        )
+
+        with pytest.raises(AssessmentAttemptNotFoundError):
+            await service.get_attempt_detail(attempt.id, user)
+
+
+class TestTotalQuestionsEnrichment:
+    async def test_list_for_application_sets_total_questions_from_template(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        attempts.list_for_application.return_value = [
+            make_attempt(),
+            make_attempt(),
+        ]
+        templates.get_by_id.return_value = make_template(
+            questions=[make_question(), make_question(), make_question()]
+        )
+
+        result = await service.list_for_application(uuid.uuid4())
+
+        assert [a.total_questions for a in result] == [3, 3]
+
+    async def test_submit_answer_return_is_enriched(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        q = make_question(
+            question_type=QuestionType.RATING, config={"min": 1, "max": 5}
+        )
+        attempt = make_attempt(
+            application_id=uuid.uuid4(), status=AttemptStatus.IN_PROGRESS
+        )
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id, applicant_id=user.id
+        )
+        templates.get_by_id.return_value = make_template(
+            time_limit_minutes=None, questions=[q]
+        )
+        attempts.list_live_answers.return_value = [
+            make_answer(question_id=q.id, answered_at=None, answer_value=None),
+        ]
+
+        result = await service.submit_answer(attempt.id, q.id, 4, user)
+
+        assert result.total_questions == 1

@@ -1,10 +1,29 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domains.applications.enums import ApplicationStatus
-from app.domains.assessments.schemas import AssessmentAttemptOut
+from app.domains.applications.enums import (
+    ApplicationStatus,
+    allowed_transitions_for,
+    can_withdraw,
+)
+from app.domains.assessments.attempts.schemas import AssessmentAttemptOut
+
+
+class _StatusCapabilitiesMixin(BaseModel):
+    """Fills `allowed_status_transitions` / `can_withdraw` from `status` so the
+    frontend never has to encode the pipeline rules (they live in enums.py)."""
+
+    status: str
+    allowed_status_transitions: list[str] = Field(default_factory=list)
+    can_withdraw: bool = False
+
+    @model_validator(mode="after")
+    def _fill_status_capabilities(self):
+        self.allowed_status_transitions = allowed_transitions_for(self.status)
+        self.can_withdraw = can_withdraw(self.status)
+        return self
 
 
 class ApplicationCreate(BaseModel):
@@ -29,27 +48,25 @@ class ExtendAssessmentDeadlineRequest(BaseModel):
         return self
 
 
-class ApplicationOut(BaseModel):
+class ApplicationOut(_StatusCapabilitiesMixin):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     job_post_id: uuid.UUID
     applicant_id: uuid.UUID
-    status: str
     resume_object_key: str
     assessment_deadline: datetime | None
     created_at: datetime
     updated_at: datetime
 
 
-class ApplicationReviewOut(BaseModel):
+class ApplicationReviewOut(_StatusCapabilitiesMixin):
     """Projection for GET /applications (HR/admin review list) — joined
     columns from job_posts + users, not a full Application/JobPost/User."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    status: str
     created_at: datetime
     job_post_id: uuid.UUID
     job_title: str
@@ -89,3 +106,10 @@ class ApplicationAssessmentsOut(BaseModel):
 
     attempts: list[AssessmentAttemptOut]
     deadline_extensions: list[AssessmentDeadlineExtensionOut]
+
+
+class ApplicationStatsOut(BaseModel):
+    """GET /applications/stats — status tally for the ATS dashboard."""
+
+    by_status: dict[str, int]
+    total: int

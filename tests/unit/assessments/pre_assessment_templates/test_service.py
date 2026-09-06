@@ -5,12 +5,14 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.question_types import InvalidQuestionConfigError, QuestionType
-from app.domains.pre_assessment_templates import entities
-from app.domains.pre_assessment_templates.exceptions import (
+from app.domains.assessments.pre_assessment_templates import entities
+from app.domains.assessments.pre_assessment_templates.exceptions import (
     PreAssessmentTemplateInUseError,
     PreAssessmentTemplateNotFoundError,
 )
-from app.domains.pre_assessment_templates.service import PreAssessmentTemplateService
+from app.domains.assessments.pre_assessment_templates.service import (
+    PreAssessmentTemplateService,
+)
 
 
 def make_service():

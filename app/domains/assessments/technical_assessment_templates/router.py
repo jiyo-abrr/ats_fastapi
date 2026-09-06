@@ -2,19 +2,19 @@ import uuid
 
 from fastapi import APIRouter, Depends, status
 
-from app.domains.rbac.dependencies import require_permission
-from app.domains.technical_assessment_templates.dependencies import (
+from app.domains.assessments.technical_assessment_templates.dependencies import (
     get_technical_assessment_template_service,
 )
-from app.domains.technical_assessment_templates.schemas import (
+from app.domains.assessments.technical_assessment_templates.schemas import (
     TechnicalAssessmentQuestionCreate,
     TechnicalAssessmentTemplateCreate,
     TechnicalAssessmentTemplateOut,
     TechnicalAssessmentTemplateUpdate,
 )
-from app.domains.technical_assessment_templates.service import (
+from app.domains.assessments.technical_assessment_templates.service import (
     TechnicalAssessmentTemplateService,
 )
+from app.domains.rbac.dependencies import require_permission
 
 # Unlike positions/tags/company_addresses/job_posts, reads here are also
 # gated — templates are internal HR-authoring content, not a public listing.
