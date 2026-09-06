@@ -1,9 +1,21 @@
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.domains.assessments.culture_fit_templates.dependencies import (
+    get_culture_fit_template_repository,
     get_culture_fit_template_service,
+)
+from app.domains.assessments.culture_fit_templates.models import (
+    CultureFitTemplate as CultureFitTemplateModel,
+)
+from app.domains.assessments.culture_fit_templates.repository import (
+    CultureFitTemplateRepository,
 )
 from app.domains.assessments.culture_fit_templates.schemas import (
     CultureFitQuestionCreate,
@@ -37,11 +49,15 @@ async def create_culture_fit_template(
     return await service.create(**payload.model_dump())
 
 
-@router.get("", response_model=list[CultureFitTemplateOut])
+@router.get("", response_model=Page[CultureFitTemplateOut])
 async def list_culture_fit_templates(
-    service: CultureFitTemplateService = Depends(get_culture_fit_template_service),
-) -> list[CultureFitTemplateOut]:
-    return await service.list()
+    query=QueryBuilder(CultureFitTemplateModel),
+    db: AsyncSession = Depends(get_db),
+    repo: CultureFitTemplateRepository = Depends(
+        get_culture_fit_template_repository
+    ),
+) -> Page[CultureFitTemplateOut]:
+    return await apaginate(db, query, transformer=repo.map_many)
 
 
 @router.get("/{template_id}", response_model=CultureFitTemplateOut)

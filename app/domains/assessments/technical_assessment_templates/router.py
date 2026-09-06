@@ -1,9 +1,21 @@
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.domains.assessments.technical_assessment_templates.dependencies import (
+    get_technical_assessment_template_repository,
     get_technical_assessment_template_service,
+)
+from app.domains.assessments.technical_assessment_templates.models import (
+    TechnicalAssessmentTemplate as TechnicalAssessmentTemplateModel,
+)
+from app.domains.assessments.technical_assessment_templates.repository import (
+    TechnicalAssessmentTemplateRepository,
 )
 from app.domains.assessments.technical_assessment_templates.schemas import (
     TechnicalAssessmentQuestionCreate,
@@ -41,13 +53,15 @@ async def create_technical_assessment_template(
     return await service.create(**payload.model_dump())
 
 
-@router.get("", response_model=list[TechnicalAssessmentTemplateOut])
+@router.get("", response_model=Page[TechnicalAssessmentTemplateOut])
 async def list_technical_assessment_templates(
-    service: TechnicalAssessmentTemplateService = Depends(
-        get_technical_assessment_template_service
+    query=QueryBuilder(TechnicalAssessmentTemplateModel),
+    db: AsyncSession = Depends(get_db),
+    repo: TechnicalAssessmentTemplateRepository = Depends(
+        get_technical_assessment_template_repository
     ),
-) -> list[TechnicalAssessmentTemplateOut]:
-    return await service.list()
+) -> Page[TechnicalAssessmentTemplateOut]:
+    return await apaginate(db, query, transformer=repo.map_many)
 
 
 @router.get("/{template_id}", response_model=TechnicalAssessmentTemplateOut)

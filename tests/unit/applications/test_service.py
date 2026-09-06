@@ -422,3 +422,90 @@ class TestDisqualify:
         await service.disqualify(uuid.uuid4())
 
         applications.update_status.assert_not_called()
+
+
+class TestStats:
+    async def test_zero_fills_all_statuses_and_totals(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.status_counts.return_value = {"applied": 3, "denied": 1}
+
+        result = await service.stats()
+
+        assert result["by_status"]["applied"] == 3
+        assert result["by_status"]["denied"] == 1
+        assert result["by_status"]["interview"] == 0
+        assert set(result["by_status"]) == {s.value for s in ApplicationStatus}
+        assert result["total"] == 4
+
+    async def test_passes_job_post_scope_through(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.status_counts.return_value = {}
+        job_post_id = uuid.uuid4()
+
+        await service.stats(job_post_id)
+
+        applications.status_counts.assert_called_once_with(job_post_id)
+
+
+class TestListForApplicant:
+    async def test_forwards_job_post_filter(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applicant_id, job_post_id = uuid.uuid4(), uuid.uuid4()
+
+        await service.list_for_applicant(applicant_id, job_post_id=job_post_id)
+
+        applications.list_for_applicant.assert_called_once_with(
+            applicant_id, job_post_id=job_post_id
+        )
+
+
+class TestGetResume:
+    async def test_returns_bytes_content_type_and_filename(self, monkeypatch):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        user = make_user()
+        application = make_application(
+            applicant_id=user.id,
+            resume_object_key="applicant_resume/u/1234_cv.pdf",
+        )
+        applications.get_by_id.return_value = application
+
+        monkeypatch.setattr(
+            "app.domains.applications.service.get_object",
+            lambda bucket, key: (b"%PDF-1.4", "application/pdf"),
+        )
+
+        data, content_type, filename = await service.get_resume(
+            application.id, user
+        )
+
+        assert data == b"%PDF-1.4"
+        assert content_type == "application/pdf"
+        assert filename == "1234_cv.pdf"
+
+    async def test_missing_object_raises_resume_unavailable(self, monkeypatch):
+        from app.core.storage import ObjectNotFoundError
+        from app.domains.applications.exceptions import ResumeUnavailableError
+
+        service, applications, job_posts, role_permissions, uow = make_service()
+        user = make_user()
+        application = make_application(applicant_id=user.id)
+        applications.get_by_id.return_value = application
+
+        def boom(bucket, key):
+            raise ObjectNotFoundError("gone")
+
+        monkeypatch.setattr(
+            "app.domains.applications.service.get_object", boom
+        )
+
+        with pytest.raises(ResumeUnavailableError):
+            await service.get_resume(application.id, user)
+
+    async def test_rejects_other_users_application(self, monkeypatch):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(applicant_id=uuid.uuid4())
+        applications.get_by_id.return_value = application
+        role_permissions.has_permission.return_value = False
+
+        with pytest.raises(ApplicationNotFoundError):
+            await service.get_resume(application.id, make_user())

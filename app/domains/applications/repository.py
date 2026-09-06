@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 
 from app.core.repository import BaseRepository
 from app.domains.applications import entities
@@ -100,6 +100,19 @@ class ApplicationRepository(
         )
         return [await self._to_entity(obj) for obj in result.scalars().all()]
 
+    async def status_counts(
+        self, job_post_id: uuid.UUID | None = None
+    ) -> dict[str, int]:
+        """`{status: count}` for the review dashboard — one GROUP BY, optionally
+        scoped to a single job post."""
+        query = select(
+            ApplicationModel.status, func.count()
+        ).group_by(ApplicationModel.status)
+        if job_post_id is not None:
+            query = query.where(ApplicationModel.job_post_id == job_post_id)
+        result = await self.db.execute(query)
+        return {row[0]: row[1] for row in result.all()}
+
     async def has_any_application_for(
         self, applicant_id: uuid.UUID, job_post_id: uuid.UUID
     ) -> bool:
@@ -143,9 +156,12 @@ class ApplicationRepository(
 
     # Projection query for an applicant's own list — joined only to job_posts
     # for the job title, so "my applications" doesn't need a second
-    # round-trip to /job-posts/{id} per row.
-    async def list_for_applicant(self, applicant_id: uuid.UUID) -> Select:
-        return (
+    # round-trip to /job-posts/{id} per row. `job_post_id` scopes it to one
+    # job post (the Apply button's "do I already have an application here").
+    async def list_for_applicant(
+        self, applicant_id: uuid.UUID, job_post_id: uuid.UUID | None = None
+    ) -> Select:
+        query = (
             select(
                 ApplicationModel.id,
                 ApplicationModel.status,
@@ -157,3 +173,6 @@ class ApplicationRepository(
             .where(ApplicationModel.applicant_id == applicant_id)
             .order_by(ApplicationModel.created_at.desc())
         )
+        if job_post_id is not None:
+            query = query.where(ApplicationModel.job_post_id == job_post_id)
+        return query

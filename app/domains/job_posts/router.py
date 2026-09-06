@@ -14,7 +14,12 @@ from app.domains.job_posts.dependencies import (
 )
 from app.domains.job_posts.models import JobPost as JobPostModel
 from app.domains.job_posts.repository import JobPostRepository
-from app.domains.job_posts.schemas import JobPostCreate, JobPostOut, JobPostUpdate
+from app.domains.job_posts.schemas import (
+    JobPostCreate,
+    JobPostOut,
+    JobPostStatsOut,
+    JobPostUpdate,
+)
 from app.domains.job_posts.service import JobPostService
 from app.domains.rbac.dependencies import require_permission
 
@@ -49,6 +54,15 @@ async def list_job_posts(
         selectinload(JobPostModel.position),
     )
     return await apaginate(db, query, transformer=repo.map_many)
+
+
+@router.get(
+    "/stats", response_model=JobPostStatsOut, dependencies=[_manage_jobs]
+)
+async def job_post_stats(
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostStatsOut:
+    return JobPostStatsOut(**await service.stats())
 
 
 @router.get("/{job_post_id}", response_model=JobPostOut)

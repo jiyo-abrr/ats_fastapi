@@ -52,9 +52,6 @@ class TechnicalAssessmentTemplateService:
             )
         return template
 
-    async def list(self) -> list[entities.TechnicalAssessmentTemplate]:
-        return await self.templates.list_all()
-
     async def update(
         self,
         template_id: uuid.UUID,

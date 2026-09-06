@@ -1,12 +1,20 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 
 from sqlalchemy import Select
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
+from app.core.config import settings
+from app.core.storage import ObjectNotFoundError, get_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications import entities
-from app.domains.applications.enums import ApplicationStatus
+from app.domains.applications.enums import (
+    ALLOWED_TRANSITIONS,
+    WITHDRAWABLE_STATUSES,
+    ApplicationStatus,
+)
 from app.domains.applications.exceptions import (
     ApplicantExcludedError,
     ApplicationNotFoundError,
@@ -15,6 +23,7 @@ from app.domains.applications.exceptions import (
     InvalidAssessmentDeadlineExtensionError,
     JobPostNotAcceptingApplicationsError,
     OnlyApplicantsCanApplyError,
+    ResumeUnavailableError,
 )
 from app.domains.applications.repository import ApplicationRepository
 from app.domains.auth import entities as auth_entities
@@ -23,31 +32,9 @@ from app.domains.job_posts.exceptions import JobPostNotFoundError
 from app.domains.job_posts.repository import JobPostRepository
 from app.domains.rbac.repository import RolePermissionRepository
 
-# Forward-only status transitions HR/admin can make via update_status().
-# `withdrawn` is reachable only via ApplicationService.withdraw() (applicant-
-# only), and `disqualified` only via ApplicationService.disqualify() (system/
-# scheduler-only) — neither is a valid target here.
-_ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
-    ApplicationStatus.APPLIED: {
-        ApplicationStatus.PRESCREENING,
-        ApplicationStatus.DENIED,
-    },
-    ApplicationStatus.PRESCREENING: {
-        ApplicationStatus.INTERVIEW,
-        ApplicationStatus.DENIED,
-    },
-    ApplicationStatus.INTERVIEW: {
-        ApplicationStatus.SUCCESS,
-        ApplicationStatus.FAILED,
-    },
-}
-
-# Statuses an applicant is still allowed to withdraw from.
-_WITHDRAWABLE_STATUSES = {
-    ApplicationStatus.APPLIED,
-    ApplicationStatus.PRESCREENING,
-    ApplicationStatus.INTERVIEW,
-}
+# The forward-only transition graph (`ALLOWED_TRANSITIONS`) and the
+# `WITHDRAWABLE_STATUSES` set both now live in enums.py so schemas can read them
+# too (see the `allowed_status_transitions` / `can_withdraw` output fields).
 
 # Statuses extend_assessment_deadline() may act on — applied (the normal
 # case, still inside the assessment window) or disqualified (the "revive"
@@ -136,13 +123,45 @@ class ApplicationService:
             job_post_id=job_post_id, status=status
         )
 
-    async def list_for_applicant(self, applicant_id: uuid.UUID) -> Select:
-        return await self.applications.list_for_applicant(applicant_id)
+    async def list_for_applicant(
+        self, applicant_id: uuid.UUID, job_post_id: uuid.UUID | None = None
+    ) -> Select:
+        return await self.applications.list_for_applicant(
+            applicant_id, job_post_id=job_post_id
+        )
 
     async def list_deadline_extensions(
         self, application_id: uuid.UUID
     ) -> list[entities.AssessmentDeadlineExtension]:
         return await self.applications.list_deadline_extensions(application_id)
+
+    async def stats(
+        self, job_post_id: uuid.UUID | None = None
+    ) -> dict[str, object]:
+        """Zero-filled status tally for the ATS dashboard (optionally scoped to
+        one job post) — replaces the frontend firing one `size=1` list call per
+        status and summing client-side."""
+        raw = await self.applications.status_counts(job_post_id)
+        by_status = {s.value: raw.get(s.value, 0) for s in ApplicationStatus}
+        return {"by_status": by_status, "total": sum(by_status.values())}
+
+    async def get_resume(
+        self, application_id: uuid.UUID, current_user: auth_entities.User
+    ) -> tuple[bytes, str, str]:
+        """`(bytes, content_type, filename)` for the application's résumé.
+        Reuses get()'s owner-or-manage_applications check (raises 404 for
+        anyone else). MinIO is sync — wrapped in a threadpool like the upload."""
+        application = await self.get(application_id, current_user)
+        try:
+            data, content_type = await run_in_threadpool(
+                get_object, settings.minio_bucket, application.resume_object_key
+            )
+        except ObjectNotFoundError as exc:
+            raise ResumeUnavailableError(
+                "The résumé for this application is not available"
+            ) from exc
+        filename = PurePosixPath(application.resume_object_key).name or "resume"
+        return data, content_type, filename
 
     async def get(
         self, application_id: uuid.UUID, current_user: auth_entities.User
@@ -164,7 +183,7 @@ class ApplicationService:
         application = await self.applications.get_by_id(application_id)
         if application is None or application.applicant_id != current_user.id:
             raise ApplicationNotFoundError(f"Application '{application_id}' not found")
-        if application.status not in _WITHDRAWABLE_STATUSES:
+        if ApplicationStatus(application.status) not in WITHDRAWABLE_STATUSES:
             raise InvalidApplicationStatusTransitionError(
                 f"Cannot withdraw an application with status '{application.status}'"
             )
@@ -187,7 +206,7 @@ class ApplicationService:
                 "automated assessment-deadline sweep"
             )
         current_status = ApplicationStatus(application.status)
-        if new_status not in _ALLOWED_TRANSITIONS.get(current_status, set()):
+        if new_status not in ALLOWED_TRANSITIONS.get(current_status, frozenset()):
             raise InvalidApplicationStatusTransitionError(
                 f"Cannot transition application from '{application.status}' to "
                 f"'{new_status}'"

@@ -1,9 +1,21 @@
 import uuid
 
 from fastapi import APIRouter, Depends, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.domains.assessments.pre_assessment_templates.dependencies import (
+    get_pre_assessment_template_repository,
     get_pre_assessment_template_service,
+)
+from app.domains.assessments.pre_assessment_templates.models import (
+    PreAssessmentTemplate as PreAssessmentTemplateModel,
+)
+from app.domains.assessments.pre_assessment_templates.repository import (
+    PreAssessmentTemplateRepository,
 )
 from app.domains.assessments.pre_assessment_templates.schemas import (
     PreAssessmentQuestionCreate,
@@ -39,13 +51,15 @@ async def create_pre_assessment_template(
     return await service.create(**payload.model_dump())
 
 
-@router.get("", response_model=list[PreAssessmentTemplateOut])
+@router.get("", response_model=Page[PreAssessmentTemplateOut])
 async def list_pre_assessment_templates(
-    service: PreAssessmentTemplateService = Depends(
-        get_pre_assessment_template_service
+    query=QueryBuilder(PreAssessmentTemplateModel),
+    db: AsyncSession = Depends(get_db),
+    repo: PreAssessmentTemplateRepository = Depends(
+        get_pre_assessment_template_repository
     ),
-) -> list[PreAssessmentTemplateOut]:
-    return await service.list()
+) -> Page[PreAssessmentTemplateOut]:
+    return await apaginate(db, query, transformer=repo.map_many)
 
 
 @router.get("/{template_id}", response_model=PreAssessmentTemplateOut)

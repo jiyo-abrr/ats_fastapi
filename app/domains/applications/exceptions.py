@@ -32,3 +32,7 @@ class InvalidApplicationStatusTransitionError(ValidationError):
 
 class InvalidAssessmentDeadlineExtensionError(ValidationError):
     pass
+
+
+class ResumeUnavailableError(NotFoundError):
+    """The application's résumé object could not be retrieved from storage."""

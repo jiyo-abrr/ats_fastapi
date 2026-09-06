@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.repository import BaseRepository
@@ -113,6 +113,14 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             select(JobPostModel).options(*_EAGER_OPTIONS)
         )
         return [await self._to_entity(obj) for obj in result.scalars().all()]
+
+    async def status_counts(self) -> dict[str, int]:
+        """`{status: count}` for the ATS dashboard — one GROUP BY, no entity
+        hydration (so the eager-load rule above doesn't apply)."""
+        result = await self.db.execute(
+            select(JobPostModel.status, func.count()).group_by(JobPostModel.status)
+        )
+        return {row[0]: row[1] for row in result.all()}
 
     async def update(self, entity: entities.JobPost) -> None:
         obj = await self.db.get(JobPostModel, entity.id)

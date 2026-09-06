@@ -48,9 +48,6 @@ class CultureFitTemplateService:
             )
         return template
 
-    async def list(self) -> list[entities.CultureFitTemplate]:
-        return await self.templates.list_all()
-
     async def update(
         self,
         template_id: uuid.UUID,
