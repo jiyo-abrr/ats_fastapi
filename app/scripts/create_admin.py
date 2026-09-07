@@ -11,10 +11,24 @@ from app.domains.auth import entities
 from app.domains.auth.repository import UserRepository
 from app.domains.rbac.repository import RoleRepository
 
+# Seed defaults — used when ADMIN_EMAIL / ADMIN_PASSWORD aren't set and the
+# prompt is left blank. Fine for local/dev bootstrapping; override via env
+# (or .env) for anything real.
+DEFAULT_ADMIN_EMAIL = "admin@example.com"
+DEFAULT_ADMIN_PASSWORD = "admin12345"
+
 
 async def main() -> None:
-    email = os.environ.get("ADMIN_EMAIL") or input("Admin email: ").strip()
-    password = os.environ.get("ADMIN_PASSWORD") or getpass("Admin password: ")
+    email = (
+        os.environ.get("ADMIN_EMAIL")
+        or input(f"Admin email [{DEFAULT_ADMIN_EMAIL}]: ").strip()
+        or DEFAULT_ADMIN_EMAIL
+    )
+    password = (
+        os.environ.get("ADMIN_PASSWORD")
+        or getpass(f"Admin password [{DEFAULT_ADMIN_PASSWORD}]: ")
+        or DEFAULT_ADMIN_PASSWORD
+    )
     first_name = os.environ.get("ADMIN_FIRST_NAME", "Admin")
     last_name = os.environ.get("ADMIN_LAST_NAME", "User")
     contact_number = os.environ.get("ADMIN_CONTACT_NUMBER", "N/A")
@@ -28,9 +42,7 @@ async def main() -> None:
 
         admin_role = await RoleRepository(db).get_by_name("admin")
         if admin_role is None:
-            print(
-                "'admin' role is not seeded — run migrations first.", file=sys.stderr
-            )
+            print("'admin' role is not seeded — run migrations first.", file=sys.stderr)
             sys.exit(1)
 
         user_id = uuid.uuid4()
