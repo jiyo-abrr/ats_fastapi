@@ -53,9 +53,7 @@ class AssessmentAttemptOut(BaseModel):
 
     @model_validator(mode="after")
     def _fill_answered_count(self):
-        self.answered_count = sum(
-            1 for a in self.answers if a.answer_value is not None
-        )
+        self.answered_count = sum(1 for a in self.answers if a.answer_value is not None)
         return self
 
 
@@ -65,7 +63,6 @@ class CurrentQuestionOut(BaseModel):
     id: uuid.UUID
     order_index: int
     prompt: str
-    instructions: str | None
     question_type: str
     config: dict | None
     time_limit_seconds: int | None

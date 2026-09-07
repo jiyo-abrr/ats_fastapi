@@ -6,6 +6,8 @@ from app.core.question_types import validate_question_config
 from app.core.unit_of_work import UnitOfWork
 from app.domains.assessments.pre_assessment_templates import entities
 from app.domains.assessments.pre_assessment_templates.exceptions import (
+    PreAssessmentQuestionNotFoundError,
+    PreAssessmentQuestionsReorderError,
     PreAssessmentTemplateInUseError,
     PreAssessmentTemplateNotFoundError,
 )
@@ -88,7 +90,6 @@ class PreAssessmentTemplateService:
         *,
         order_index: int,
         prompt: str,
-        instructions: str | None,
         question_type: str,
         config: dict | None,
         time_limit_seconds: int | None,
@@ -101,7 +102,6 @@ class PreAssessmentTemplateService:
                 template_id=template_id,
                 order_index=order_index,
                 prompt=prompt,
-                instructions=instructions,
                 question_type=question_type,
                 config=config,
                 time_limit_seconds=time_limit_seconds,
@@ -109,3 +109,64 @@ class PreAssessmentTemplateService:
         )
         await self.uow.commit()
         return await self.templates.get_by_id(template_id)
+
+    async def update_question(
+        self,
+        template_id: uuid.UUID,
+        question_id: uuid.UUID,
+        *,
+        prompt: str,
+        question_type: str,
+        config: dict | None,
+        time_limit_seconds: int | None,
+    ) -> entities.PreAssessmentTemplate:
+        template = await self.get(template_id)
+        existing = self._require_question(template, question_id)
+        validate_question_config(question_type, config)
+        await self.templates.update_question(
+            entities.PreAssessmentQuestion(
+                id=question_id,
+                template_id=template_id,
+                order_index=existing.order_index,
+                prompt=prompt,
+                question_type=question_type,
+                config=config,
+                time_limit_seconds=time_limit_seconds,
+            )
+        )
+        await self.uow.commit()
+        return await self.templates.get_by_id(template_id)
+
+    async def delete_question(
+        self, template_id: uuid.UUID, question_id: uuid.UUID
+    ) -> entities.PreAssessmentTemplate:
+        template = await self.get(template_id)
+        self._require_question(template, question_id)
+        await self.templates.delete_question(question_id)
+        await self.uow.commit()
+        return await self.templates.get_by_id(template_id)
+
+    async def reorder_questions(
+        self, template_id: uuid.UUID, question_ids: list[uuid.UUID]
+    ) -> entities.PreAssessmentTemplate:
+        template = await self.get(template_id)
+        current = {q.id for q in template.questions}
+        if len(question_ids) != len(current) or set(question_ids) != current:
+            raise PreAssessmentQuestionsReorderError(
+                "question_ids must list every current question of this template "
+                "exactly once"
+            )
+        await self.templates.reorder_questions(template_id, question_ids)
+        await self.uow.commit()
+        return await self.templates.get_by_id(template_id)
+
+    @staticmethod
+    def _require_question(
+        template: entities.PreAssessmentTemplate, question_id: uuid.UUID
+    ) -> entities.PreAssessmentQuestion:
+        for question in template.questions:
+            if question.id == question_id:
+                return question
+        raise PreAssessmentQuestionNotFoundError(
+            f"Question '{question_id}' not found on this pre-assessment template"
+        )

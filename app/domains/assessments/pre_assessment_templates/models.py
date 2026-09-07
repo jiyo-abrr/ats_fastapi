@@ -50,7 +50,6 @@ class PreAssessmentQuestion(Base):
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
     prompt: Mapped[str] = mapped_column(String(2000), nullable=False)
-    instructions: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     question_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # Shape depends on question_type — see app.core.question_types. Always
     # read/written as a whole unit, never filtered into individually, so

@@ -23,10 +23,22 @@ class CultureFitTemplateUpdate(BaseModel):
 class CultureFitQuestionCreate(BaseModel):
     order_index: int
     prompt: str
-    instructions: str | None = None
     question_type: QuestionType
     config: dict | None = None
     time_limit_seconds: int | None = None
+
+
+class CultureFitQuestionUpdate(BaseModel):
+    prompt: str
+    question_type: QuestionType
+    config: dict | None = None
+    time_limit_seconds: int | None = None
+
+
+class CultureFitQuestionsReorder(BaseModel):
+    """The template's full question-id list in the desired order."""
+
+    question_ids: list[uuid.UUID]
 
 
 class CultureFitQuestionOut(BaseModel):
@@ -35,7 +47,6 @@ class CultureFitQuestionOut(BaseModel):
     id: uuid.UUID
     order_index: int
     prompt: str
-    instructions: str | None
     question_type: str
     config: dict | None
     time_limit_seconds: int | None

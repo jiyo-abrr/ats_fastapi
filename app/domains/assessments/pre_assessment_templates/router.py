@@ -19,6 +19,8 @@ from app.domains.assessments.pre_assessment_templates.repository import (
 )
 from app.domains.assessments.pre_assessment_templates.schemas import (
     PreAssessmentQuestionCreate,
+    PreAssessmentQuestionsReorder,
+    PreAssessmentQuestionUpdate,
     PreAssessmentTemplateCreate,
     PreAssessmentTemplateOut,
     PreAssessmentTemplateUpdate,
@@ -106,3 +108,47 @@ async def add_pre_assessment_question(
     ),
 ) -> PreAssessmentTemplateOut:
     return await service.add_question(template_id, **payload.model_dump())
+
+
+# Declared before the parametrized `/questions/{question_id}` route below so
+# "reorder" is never parsed as a question id.
+@router.put("/{template_id}/questions/reorder", response_model=PreAssessmentTemplateOut)
+async def reorder_pre_assessment_questions(
+    template_id: uuid.UUID,
+    payload: PreAssessmentQuestionsReorder,
+    service: PreAssessmentTemplateService = Depends(
+        get_pre_assessment_template_service
+    ),
+) -> PreAssessmentTemplateOut:
+    return await service.reorder_questions(template_id, payload.question_ids)
+
+
+@router.put(
+    "/{template_id}/questions/{question_id}",
+    response_model=PreAssessmentTemplateOut,
+)
+async def update_pre_assessment_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: PreAssessmentQuestionUpdate,
+    service: PreAssessmentTemplateService = Depends(
+        get_pre_assessment_template_service
+    ),
+) -> PreAssessmentTemplateOut:
+    return await service.update_question(
+        template_id, question_id, **payload.model_dump()
+    )
+
+
+@router.delete(
+    "/{template_id}/questions/{question_id}",
+    response_model=PreAssessmentTemplateOut,
+)
+async def delete_pre_assessment_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    service: PreAssessmentTemplateService = Depends(
+        get_pre_assessment_template_service
+    ),
+) -> PreAssessmentTemplateOut:
+    return await service.delete_question(template_id, question_id)

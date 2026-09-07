@@ -19,6 +19,8 @@ from app.domains.assessments.culture_fit_templates.repository import (
 )
 from app.domains.assessments.culture_fit_templates.schemas import (
     CultureFitQuestionCreate,
+    CultureFitQuestionsReorder,
+    CultureFitQuestionUpdate,
     CultureFitTemplateCreate,
     CultureFitTemplateOut,
     CultureFitTemplateUpdate,
@@ -53,9 +55,7 @@ async def create_culture_fit_template(
 async def list_culture_fit_templates(
     query=QueryBuilder(CultureFitTemplateModel),
     db: AsyncSession = Depends(get_db),
-    repo: CultureFitTemplateRepository = Depends(
-        get_culture_fit_template_repository
-    ),
+    repo: CultureFitTemplateRepository = Depends(get_culture_fit_template_repository),
 ) -> Page[CultureFitTemplateOut]:
     return await apaginate(db, query, transformer=repo.map_many)
 
@@ -96,3 +96,41 @@ async def add_culture_fit_question(
     service: CultureFitTemplateService = Depends(get_culture_fit_template_service),
 ) -> CultureFitTemplateOut:
     return await service.add_question(template_id, **payload.model_dump())
+
+
+# Declared before the parametrized `/questions/{question_id}` route below so
+# "reorder" is never parsed as a question id.
+@router.put("/{template_id}/questions/reorder", response_model=CultureFitTemplateOut)
+async def reorder_culture_fit_questions(
+    template_id: uuid.UUID,
+    payload: CultureFitQuestionsReorder,
+    service: CultureFitTemplateService = Depends(get_culture_fit_template_service),
+) -> CultureFitTemplateOut:
+    return await service.reorder_questions(template_id, payload.question_ids)
+
+
+@router.put(
+    "/{template_id}/questions/{question_id}",
+    response_model=CultureFitTemplateOut,
+)
+async def update_culture_fit_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: CultureFitQuestionUpdate,
+    service: CultureFitTemplateService = Depends(get_culture_fit_template_service),
+) -> CultureFitTemplateOut:
+    return await service.update_question(
+        template_id, question_id, **payload.model_dump()
+    )
+
+
+@router.delete(
+    "/{template_id}/questions/{question_id}",
+    response_model=CultureFitTemplateOut,
+)
+async def delete_culture_fit_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    service: CultureFitTemplateService = Depends(get_culture_fit_template_service),
+) -> CultureFitTemplateOut:
+    return await service.delete_question(template_id, question_id)

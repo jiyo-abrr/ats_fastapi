@@ -52,9 +52,7 @@ class AssessmentAttemptRepository(
             reopens=await self.list_reopens(obj.id),
         )
 
-    def _to_model(
-        self, entity: entities.AssessmentAttempt
-    ) -> AssessmentAttemptModel:
+    def _to_model(self, entity: entities.AssessmentAttempt) -> AssessmentAttemptModel:
         return AssessmentAttemptModel(
             id=entity.id,
             application_id=entity.application_id,

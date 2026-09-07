@@ -19,6 +19,8 @@ from app.domains.assessments.technical_assessment_templates.repository import (
 )
 from app.domains.assessments.technical_assessment_templates.schemas import (
     TechnicalAssessmentQuestionCreate,
+    TechnicalAssessmentQuestionsReorder,
+    TechnicalAssessmentQuestionUpdate,
     TechnicalAssessmentTemplateCreate,
     TechnicalAssessmentTemplateOut,
     TechnicalAssessmentTemplateUpdate,
@@ -108,3 +110,50 @@ async def add_technical_assessment_question(
     ),
 ) -> TechnicalAssessmentTemplateOut:
     return await service.add_question(template_id, **payload.model_dump())
+
+
+# Declared before the parametrized `/questions/{question_id}` route below so
+# "reorder" is never parsed as a question id.
+@router.put(
+    "/{template_id}/questions/reorder",
+    response_model=TechnicalAssessmentTemplateOut,
+)
+async def reorder_technical_assessment_questions(
+    template_id: uuid.UUID,
+    payload: TechnicalAssessmentQuestionsReorder,
+    service: TechnicalAssessmentTemplateService = Depends(
+        get_technical_assessment_template_service
+    ),
+) -> TechnicalAssessmentTemplateOut:
+    return await service.reorder_questions(template_id, payload.question_ids)
+
+
+@router.put(
+    "/{template_id}/questions/{question_id}",
+    response_model=TechnicalAssessmentTemplateOut,
+)
+async def update_technical_assessment_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: TechnicalAssessmentQuestionUpdate,
+    service: TechnicalAssessmentTemplateService = Depends(
+        get_technical_assessment_template_service
+    ),
+) -> TechnicalAssessmentTemplateOut:
+    return await service.update_question(
+        template_id, question_id, **payload.model_dump()
+    )
+
+
+@router.delete(
+    "/{template_id}/questions/{question_id}",
+    response_model=TechnicalAssessmentTemplateOut,
+)
+async def delete_technical_assessment_question(
+    template_id: uuid.UUID,
+    question_id: uuid.UUID,
+    service: TechnicalAssessmentTemplateService = Depends(
+        get_technical_assessment_template_service
+    ),
+) -> TechnicalAssessmentTemplateOut:
+    return await service.delete_question(template_id, question_id)

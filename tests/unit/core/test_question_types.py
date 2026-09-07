@@ -28,6 +28,36 @@ class TestValidateQuestionConfig:
     def test_text_accepts_no_config(self):
         validate_question_config(QuestionType.TEXT, None)
 
+    def test_text_rejects_negative_max_length(self):
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(QuestionType.TEXT, {"max_length": -1})
+
+    def test_multiple_choice_rejects_min_selections_gt_max(self):
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(
+                QuestionType.MULTIPLE_CHOICE,
+                {"options": ["A", "B", "C"], "min_selections": 3, "max_selections": 1},
+            )
+
+    def test_multiple_choice_rejects_max_selections_over_option_count(self):
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(
+                QuestionType.MULTIPLE_CHOICE,
+                {"options": ["A", "B"], "max_selections": 5},
+            )
+
+    def test_date_rejects_min_after_max(self):
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(
+                QuestionType.DATE,
+                {"min_date": "2026-06-01", "max_date": "2026-01-01"},
+            )
+
+    def test_date_accepts_valid_bounds(self):
+        validate_question_config(
+            QuestionType.DATE, {"min_date": "2026-01-01", "max_date": "2026-12-31"}
+        )
+
 
 class TestValidateAnswerValue:
     def test_text_rejects_empty_string(self):

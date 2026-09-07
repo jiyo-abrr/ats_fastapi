@@ -191,9 +191,7 @@ class TestStartQuestion:
         q1 = make_question(order_index=1)
         q2 = make_question(order_index=2)
         attempt = make_attempt(status=AttemptStatus.NOT_STARTED)
-        applications.get_by_id.return_value = make_application(
-            applicant_id=user.id
-        )
+        applications.get_by_id.return_value = make_application(applicant_id=user.id)
         attempts.get_by_id.return_value = attempt
         templates.get_by_id.return_value = make_template(questions=[q1, q2])
         attempts.list_live_answers.return_value = []
@@ -233,9 +231,7 @@ class TestStartQuestion:
         service, attempts, templates, job_posts, applications, uow = make_service()
         user = make_user()
         started_at = datetime.now(UTC) - timedelta(minutes=61)
-        attempt = make_attempt(
-            status=AttemptStatus.IN_PROGRESS, started_at=started_at
-        )
+        attempt = make_attempt(status=AttemptStatus.IN_PROGRESS, started_at=started_at)
         applications.get_by_id.return_value = make_application(applicant_id=user.id)
         attempts.get_by_id.return_value = attempt
         templates.get_by_id.return_value = make_template(time_limit_minutes=60)

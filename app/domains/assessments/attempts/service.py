@@ -63,9 +63,7 @@ class AssessmentService:
         """Populate `total_questions` from the attempt's template — called on
         every attempt returned to a router (list + submit + reopen), so the
         frontend gets progress without a gated template fetch."""
-        template = await self._get_template(
-            attempt.template_type, attempt.template_id
-        )
+        template = await self._get_template(attempt.template_type, attempt.template_id)
         attempt.total_questions = len(template.questions) if template else 0
         return attempt
 
@@ -182,8 +180,7 @@ class AssessmentService:
 
         if current_question.id != question_id:
             raise NotCurrentQuestionError(
-                f"Question '{question_id}' is not the current question for "
-                "this attempt"
+                f"Question '{question_id}' is not the current question for this attempt"
             )
 
         if current_answer is not None:
@@ -317,9 +314,7 @@ class AssessmentService:
         applies layer-2 expiry (that stays a side effect of start/submit);
         surfaces only the current question, matching the sequential rule."""
         attempt = await self._require_owned_attempt(attempt_id, current_user)
-        template = await self._get_template(
-            attempt.template_type, attempt.template_id
-        )
+        template = await self._get_template(attempt.template_type, attempt.template_id)
         now = datetime.now(UTC)
         answers = await self.attempts.list_live_answers(attempt_id)
         answers_by_question = {a.question_id: a for a in answers}

@@ -43,8 +43,10 @@ def validate_question_config(question_type: str, config: dict | None) -> None:
     an applicant submits, not what HR authored."""
     qtype = QuestionType(question_type)
 
+    cfg = config or {}
+
     if qtype in (QuestionType.SINGLE_CHOICE, QuestionType.MULTIPLE_CHOICE):
-        options = (config or {}).get("options")
+        options = cfg.get("options")
         if not options or not isinstance(options, list):
             raise InvalidQuestionConfigError(
                 f"'{qtype}' questions require a non-empty 'options' list in config"
@@ -52,12 +54,63 @@ def validate_question_config(question_type: str, config: dict | None) -> None:
         if not all(isinstance(option, str) for option in options):
             raise InvalidQuestionConfigError("'options' must be a list of strings")
 
-    if qtype in (QuestionType.RATING, QuestionType.NUMBER) and config:
-        min_value, max_value = config.get("min"), config.get("max")
+    if qtype == QuestionType.MULTIPLE_CHOICE:
+        options = cfg.get("options") or []
+        min_sel = _non_negative_int(qtype, "min_selections", cfg.get("min_selections"))
+        max_sel = _non_negative_int(qtype, "max_selections", cfg.get("max_selections"))
+        if min_sel is not None and max_sel is not None and min_sel > max_sel:
+            raise InvalidQuestionConfigError(
+                f"'{qtype}' config 'min_selections' must be <= 'max_selections'"
+            )
+        if max_sel is not None and max_sel > len(options):
+            raise InvalidQuestionConfigError(
+                f"'{qtype}' config 'max_selections' can't exceed the number of options"
+            )
+
+    if qtype in (QuestionType.TEXT, QuestionType.LONG_TEXT):
+        _non_negative_int(qtype, "max_length", cfg.get("max_length"))
+
+    if qtype in (QuestionType.RATING, QuestionType.NUMBER):
+        min_value, max_value = cfg.get("min"), cfg.get("max")
         if min_value is not None and max_value is not None and min_value >= max_value:
             raise InvalidQuestionConfigError(
                 f"'{qtype}' config 'min' must be less than 'max'"
             )
+
+    if qtype == QuestionType.DATE:
+        min_date, max_date = (
+            _iso_date(cfg.get("min_date")),
+            _iso_date(cfg.get("max_date")),
+        )
+        if min_date is not None and max_date is not None and min_date > max_date:
+            raise InvalidQuestionConfigError(
+                "'date' config 'min_date' must be on or before 'max_date'"
+            )
+
+
+def _non_negative_int(qtype: str, key: str, value: Any) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise InvalidQuestionConfigError(
+            f"'{qtype}' config '{key}' must be a non-negative integer"
+        )
+    return value
+
+
+def _iso_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidQuestionConfigError(
+            "'date' config bounds must be ISO date strings"
+        )
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise InvalidQuestionConfigError(
+            "'date' config bounds must be valid ISO date strings"
+        ) from None
 
 
 def validate_answer_value(question_type: str, config: dict | None, value: Any) -> None:
@@ -72,9 +125,7 @@ def validate_answer_value(question_type: str, config: dict | None, value: Any) -
             raise InvalidAnswerValueError("Answer must be a non-empty string")
         max_length = cfg.get("max_length")
         if max_length is not None and len(value) > max_length:
-            raise InvalidAnswerValueError(
-                f"Answer exceeds max_length of {max_length}"
-            )
+            raise InvalidAnswerValueError(f"Answer exceeds max_length of {max_length}")
 
     elif qtype == QuestionType.SINGLE_CHOICE:
         options = cfg.get("options") or []

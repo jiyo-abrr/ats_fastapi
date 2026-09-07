@@ -64,7 +64,6 @@ class TechnicalAssessmentTemplateRepository(
             template_id=obj.template_id,
             order_index=obj.order_index,
             prompt=obj.prompt,
-            instructions=obj.instructions,
             question_type=obj.question_type,
             config=obj.config,
             time_limit_seconds=obj.time_limit_seconds,
@@ -88,7 +87,6 @@ class TechnicalAssessmentTemplateRepository(
                 template_id=question.template_id,
                 order_index=question.order_index,
                 prompt=question.prompt,
-                instructions=question.instructions,
                 question_type=question.question_type,
                 config=question.config,
                 time_limit_seconds=question.time_limit_seconds,
@@ -100,3 +98,33 @@ class TechnicalAssessmentTemplateRepository(
     ) -> entities.TechnicalAssessmentQuestion | None:
         obj = await self.db.get(TechnicalAssessmentQuestionModel, question_id)
         return self._question_to_entity(obj) if obj is not None else None
+
+    async def update_question(
+        self, question: entities.TechnicalAssessmentQuestion
+    ) -> None:
+        obj = await self.db.get(TechnicalAssessmentQuestionModel, question.id)
+        if obj is None:
+            return
+        obj.prompt = question.prompt
+        obj.question_type = question.question_type
+        obj.config = question.config
+        obj.time_limit_seconds = question.time_limit_seconds
+
+    async def delete_question(self, question_id: uuid.UUID) -> None:
+        obj = await self.db.get(TechnicalAssessmentQuestionModel, question_id)
+        if obj is not None:
+            await self.db.delete(obj)
+
+    async def reorder_questions(
+        self, template_id: uuid.UUID, ordered_ids: list[uuid.UUID]
+    ) -> None:
+        result = await self.db.execute(
+            select(TechnicalAssessmentQuestionModel).where(
+                TechnicalAssessmentQuestionModel.template_id == template_id
+            )
+        )
+        by_id = {q.id: q for q in result.scalars().all()}
+        for position, question_id in enumerate(ordered_ids):
+            obj = by_id.get(question_id)
+            if obj is not None:
+                obj.order_index = position

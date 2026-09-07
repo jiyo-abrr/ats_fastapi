@@ -1,4 +1,4 @@
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 
 
 class PreAssessmentTemplateNotFoundError(NotFoundError):
@@ -6,4 +6,12 @@ class PreAssessmentTemplateNotFoundError(NotFoundError):
 
 
 class PreAssessmentTemplateInUseError(ConflictError):
+    pass
+
+
+class PreAssessmentQuestionNotFoundError(NotFoundError):
+    pass
+
+
+class PreAssessmentQuestionsReorderError(ValidationError):
     pass

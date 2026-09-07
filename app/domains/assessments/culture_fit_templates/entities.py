@@ -10,7 +10,6 @@ class CultureFitQuestion:
     order_index: int
     prompt: str
     question_type: str
-    instructions: str | None = None
     config: dict | None = None
     time_limit_seconds: int | None = None
 
