@@ -8,7 +8,10 @@ from app.domains.applications.enums import (
     allowed_transitions_for,
     can_withdraw,
 )
-from app.domains.assessments.attempts.schemas import AssessmentAttemptOut
+from app.domains.assessments.attempts.schemas import (
+    AssessmentAttemptOut,
+    AttemptReviewOut,
+)
 
 
 class _StatusCapabilitiesMixin(BaseModel):
@@ -88,6 +91,41 @@ class ApplicantSummaryOut(BaseModel):
     email: str
     application_count: int
     latest_applied_at: datetime
+
+
+class JobAssessmentReviewRowOut(BaseModel):
+    """One applicant's attempt at a single assessment, for the Compare tab's
+    per-assessment view (GET /applications/assessment-review)."""
+
+    application_id: uuid.UUID
+    applicant_first_name: str
+    applicant_last_name: str
+    applicant_email: str
+    attempt: AttemptReviewOut | None = None
+
+
+class AttemptSummaryOut(BaseModel):
+    template_type: str
+    status: str
+    answered_count: int
+    total_questions: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class ApplicationScorecardOut(BaseModel):
+    """GET /applications/assessment-scorecard — one row per applicant to a job
+    post with a compact per-assessment roll-up, for the Compare tab."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    status: str
+    applicant_first_name: str
+    applicant_last_name: str
+    applicant_email: str
+    assessments: list[AttemptSummaryOut] = Field(default_factory=list)
 
 
 class ApplicationSummaryOut(BaseModel):

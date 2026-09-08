@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.repository import BaseRepository
 from app.domains.assessments.attempts import entities
@@ -70,6 +70,36 @@ class AssessmentAttemptRepository(
             )
         )
         return [await self._to_entity(obj) for obj in result.scalars().all()]
+
+    async def list_models_for_applications(
+        self, application_ids: list[uuid.UUID]
+    ) -> list[AssessmentAttemptModel]:
+        """Raw attempt rows for many applications in one query — for the
+        job-post assessment scorecard (no per-application round trips)."""
+        if not application_ids:
+            return []
+        result = await self.db.execute(
+            select(AssessmentAttemptModel).where(
+                AssessmentAttemptModel.application_id.in_(application_ids)
+            )
+        )
+        return list(result.scalars().all())
+
+    async def answered_counts(
+        self, attempt_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        if not attempt_ids:
+            return {}
+        result = await self.db.execute(
+            select(AssessmentAnswerModel.attempt_id, func.count())
+            .where(
+                AssessmentAnswerModel.attempt_id.in_(attempt_ids),
+                AssessmentAnswerModel.superseded_at.is_(None),
+                AssessmentAnswerModel.answer_value.is_not(None),
+            )
+            .group_by(AssessmentAnswerModel.attempt_id)
+        )
+        return {row[0]: row[1] for row in result.all()}
 
     async def start_attempt(self, attempt_id: uuid.UUID, started_at: datetime) -> None:
         obj = await self.db.get(AssessmentAttemptModel, attempt_id)

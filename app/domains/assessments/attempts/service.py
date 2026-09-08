@@ -307,6 +307,39 @@ class AssessmentService:
             await self._with_total_questions(attempt)
         return attempts
 
+    async def summaries_for_applications(
+        self, application_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[dict]]:
+        """Per-application assessment roll-up for the job-post scorecard:
+        status + answered/total per attached assessment, batched (≈4 queries
+        for a whole page rather than N round trips)."""
+        attempts = await self.attempts.list_models_for_applications(application_ids)
+        answered = await self.attempts.answered_counts([a.id for a in attempts])
+        total_cache: dict[tuple[str, str], int] = {}
+
+        async def _total_questions(template_type: str, template_id) -> int:
+            key = (template_type, str(template_id))
+            if key not in total_cache:
+                template = await self._get_template(template_type, template_id)
+                total_cache[key] = len(template.questions) if template else 0
+            return total_cache[key]
+
+        out: dict[uuid.UUID, list[dict]] = {aid: [] for aid in application_ids}
+        for a in attempts:
+            out.setdefault(a.application_id, []).append(
+                {
+                    "template_type": a.template_type,
+                    "status": a.status,
+                    "answered_count": answered.get(a.id, 0),
+                    "total_questions": await _total_questions(
+                        a.template_type, a.template_id
+                    ),
+                    "started_at": a.started_at,
+                    "completed_at": a.completed_at,
+                }
+            )
+        return out
+
     async def list_review_for_application(
         self, application_id: uuid.UUID
     ) -> list[dict]:

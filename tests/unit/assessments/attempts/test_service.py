@@ -450,6 +450,34 @@ class TestGetAttemptDetail:
             await service.get_attempt_detail(attempt.id, user)
 
 
+class TestSummariesForApplications:
+    async def test_rolls_up_status_and_answered_totals(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        app_id = uuid.uuid4()
+        attempt = make_attempt(application_id=app_id, status=AttemptStatus.IN_PROGRESS)
+        attempts.list_models_for_applications.return_value = [attempt]
+        attempts.answered_counts.return_value = {attempt.id: 2}
+        templates.get_by_id.return_value = make_template(
+            questions=[make_question(), make_question(), make_question()]
+        )
+
+        out = await service.summaries_for_applications([app_id])
+
+        assert out[app_id][0]["answered_count"] == 2
+        assert out[app_id][0]["total_questions"] == 3
+        assert out[app_id][0]["status"] == AttemptStatus.IN_PROGRESS
+
+    async def test_application_with_no_attempts_gets_empty_list(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        app_id = uuid.uuid4()
+        attempts.list_models_for_applications.return_value = []
+        attempts.answered_counts.return_value = {}
+
+        out = await service.summaries_for_applications([app_id])
+
+        assert out == {app_id: []}
+
+
 class TestListReviewForApplication:
     async def test_pairs_each_question_with_its_answer(self):
         service, attempts, templates, job_posts, applications, uow = make_service()

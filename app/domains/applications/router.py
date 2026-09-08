@@ -14,11 +14,14 @@ from app.domains.applications.schemas import (
     ApplicationCreate,
     ApplicationOut,
     ApplicationReviewOut,
+    ApplicationScorecardOut,
     ApplicationStatsOut,
     ApplicationStatusUpdate,
     ApplicationSummaryOut,
     AssessmentDeadlineExtensionOut,
+    AttemptSummaryOut,
     ExtendAssessmentDeadlineRequest,
+    JobAssessmentReviewRowOut,
 )
 from app.domains.applications.service import ApplicationService
 from app.domains.assessments.attempts.dependencies import get_assessment_service
@@ -126,6 +129,77 @@ async def list_applicants(
         query,
         transformer=lambda rows: [ApplicantSummaryOut.model_validate(r) for r in rows],
     )
+
+
+@router.get(
+    "/assessment-scorecard",
+    response_model=Page[ApplicationScorecardOut],
+    dependencies=[_manage_applications],
+)
+async def assessment_scorecard(
+    job_post_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    service: ApplicationService = Depends(get_application_service),
+    assessment_service: AssessmentService = Depends(get_assessment_service),
+) -> Page[ApplicationScorecardOut]:
+    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
+
+    async def _transform(rows):
+        summaries = await assessment_service.summaries_for_applications(
+            [r.id for r in rows]
+        )
+        return [
+            ApplicationScorecardOut(
+                id=r.id,
+                created_at=r.created_at,
+                status=r.status,
+                applicant_first_name=r.applicant_first_name,
+                applicant_last_name=r.applicant_last_name,
+                applicant_email=r.applicant_email,
+                assessments=[
+                    AttemptSummaryOut(**summary) for summary in summaries.get(r.id, [])
+                ],
+            )
+            for r in rows
+        ]
+
+    return await apaginate(db, query, transformer=_transform)
+
+
+@router.get(
+    "/assessment-review",
+    response_model=Page[JobAssessmentReviewRowOut],
+    dependencies=[_manage_applications],
+)
+async def job_assessment_review(
+    job_post_id: uuid.UUID,
+    template_type: str,
+    db: AsyncSession = Depends(get_db),
+    service: ApplicationService = Depends(get_application_service),
+    assessment_service: AssessmentService = Depends(get_assessment_service),
+) -> Page[JobAssessmentReviewRowOut]:
+    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
+
+    async def _transform(rows):
+        out: list[JobAssessmentReviewRowOut] = []
+        for r in rows:
+            reviews = await assessment_service.list_review_for_application(r.id)
+            match = next(
+                (rv for rv in reviews if rv["template_type"] == template_type),
+                None,
+            )
+            out.append(
+                JobAssessmentReviewRowOut(
+                    application_id=r.id,
+                    applicant_first_name=r.applicant_first_name,
+                    applicant_last_name=r.applicant_last_name,
+                    applicant_email=r.applicant_email,
+                    attempt=AttemptReviewOut.model_validate(match) if match else None,
+                )
+            )
+        return out
+
+    return await apaginate(db, query, transformer=_transform)
 
 
 @router.get("/{application_id}", response_model=ApplicationOut)
