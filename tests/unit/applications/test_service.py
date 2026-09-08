@@ -459,6 +459,36 @@ class TestListForApplicant:
         )
 
 
+class TestListApplicants:
+    async def test_forwards_search(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+
+        await service.list_applicants(search="ana")
+
+        applications.list_applicants.assert_called_once_with(search="ana")
+
+    async def test_forwards_none_search(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+
+        await service.list_applicants(search=None)
+
+        applications.list_applicants.assert_called_once_with(search=None)
+
+
+class TestListForReview:
+    async def test_forwards_applicant_id_filter(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applicant_id = uuid.uuid4()
+
+        await service.list_for_review(
+            job_post_id=None, status=None, applicant_id=applicant_id
+        )
+
+        applications.list_for_review.assert_called_once_with(
+            job_post_id=None, status=None, applicant_id=applicant_id
+        )
+
+
 class TestGetResume:
     async def test_returns_bytes_content_type_and_filename(self, monkeypatch):
         service, applications, job_posts, role_permissions, uow = make_service()

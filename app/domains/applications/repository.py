@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 
 from app.core.repository import BaseRepository
 from app.domains.applications import entities
@@ -105,9 +105,9 @@ class ApplicationRepository(
     ) -> dict[str, int]:
         """`{status: count}` for the review dashboard — one GROUP BY, optionally
         scoped to a single job post."""
-        query = select(
-            ApplicationModel.status, func.count()
-        ).group_by(ApplicationModel.status)
+        query = select(ApplicationModel.status, func.count()).group_by(
+            ApplicationModel.status
+        )
         if job_post_id is not None:
             query = query.where(ApplicationModel.job_post_id == job_post_id)
         result = await self.db.execute(query)
@@ -130,7 +130,11 @@ class ApplicationRepository(
     # (it only builds a select() against a single ORM class) — filtering is
     # explicit typed params instead of the generic JSON filter syntax.
     async def list_for_review(
-        self, *, job_post_id: uuid.UUID | None, status: str | None
+        self,
+        *,
+        job_post_id: uuid.UUID | None,
+        status: str | None,
+        applicant_id: uuid.UUID | None = None,
     ) -> Select:
         query = (
             select(
@@ -152,6 +156,8 @@ class ApplicationRepository(
             query = query.where(ApplicationModel.job_post_id == job_post_id)
         if status is not None:
             query = query.where(ApplicationModel.status == status)
+        if applicant_id is not None:
+            query = query.where(ApplicationModel.applicant_id == applicant_id)
         return query
 
     # Projection query for an applicant's own list — joined only to job_posts
@@ -175,4 +181,38 @@ class ApplicationRepository(
         )
         if job_post_id is not None:
             query = query.where(ApplicationModel.job_post_id == job_post_id)
+        return query
+
+    # Applicant-centric roll-up for the HR/admin "Applicants" list: one row
+    # per person who has at least one application, with a count and their
+    # most recent apply date. Distinct from list_for_review (one row per
+    # application) — this is grouped.
+    async def list_applicants(self, *, search: str | None) -> Select:
+        query = (
+            select(
+                ApplicationModel.applicant_id,
+                UserModel.first_name.label("first_name"),
+                UserModel.last_name.label("last_name"),
+                UserModel.email.label("email"),
+                func.count(ApplicationModel.id).label("application_count"),
+                func.max(ApplicationModel.created_at).label("latest_applied_at"),
+            )
+            .join(UserModel, UserModel.id == ApplicationModel.applicant_id)
+            .group_by(
+                ApplicationModel.applicant_id,
+                UserModel.first_name,
+                UserModel.last_name,
+                UserModel.email,
+            )
+            .order_by(func.max(ApplicationModel.created_at).desc())
+        )
+        if search:
+            like = f"%{search}%"
+            query = query.where(
+                or_(
+                    UserModel.first_name.ilike(like),
+                    UserModel.last_name.ilike(like),
+                    UserModel.email.ilike(like),
+                )
+            )
         return query

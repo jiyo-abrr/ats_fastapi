@@ -76,6 +76,20 @@ class ApplicationReviewOut(_StatusCapabilitiesMixin):
     applicant_email: str
 
 
+class ApplicantSummaryOut(BaseModel):
+    """Projection for GET /applications/applicants — one row per person who
+    has applied at least once, grouped from applications + users."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    applicant_id: uuid.UUID
+    first_name: str
+    last_name: str
+    email: str
+    application_count: int
+    latest_applied_at: datetime
+
+
 class ApplicationSummaryOut(BaseModel):
     """Projection for GET /applications/me — joined to job_posts only."""
 

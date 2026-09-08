@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.schemas import (
+    ApplicantSummaryOut,
     ApplicationAssessmentsOut,
     ApplicationCreate,
     ApplicationOut,
@@ -90,14 +91,35 @@ async def application_stats(
 async def list_applications(
     job_post_id: uuid.UUID | None = None,
     status: ApplicationStatus | None = None,
+    applicant_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationReviewOut]:
-    query = await service.list_for_review(job_post_id=job_post_id, status=status)
+    query = await service.list_for_review(
+        job_post_id=job_post_id, status=status, applicant_id=applicant_id
+    )
     return await apaginate(
         db,
         query,
         transformer=lambda rows: [ApplicationReviewOut.model_validate(r) for r in rows],
+    )
+
+
+@router.get(
+    "/applicants",
+    response_model=Page[ApplicantSummaryOut],
+    dependencies=[_manage_applications],
+)
+async def list_applicants(
+    search: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    service: ApplicationService = Depends(get_application_service),
+) -> Page[ApplicantSummaryOut]:
+    query = await service.list_applicants(search=search)
+    return await apaginate(
+        db,
+        query,
+        transformer=lambda rows: [ApplicantSummaryOut.model_validate(r) for r in rows],
     )
 
 

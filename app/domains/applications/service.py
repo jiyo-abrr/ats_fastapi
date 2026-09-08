@@ -79,9 +79,7 @@ class ApplicationService:
             ):
                 excluded_job_post = await self.job_posts.get_by_id(excluded_id)
                 title = (
-                    excluded_job_post.job_title
-                    if excluded_job_post
-                    else excluded_id
+                    excluded_job_post.job_title if excluded_job_post else excluded_id
                 )
                 raise ApplicantExcludedError(
                     "You cannot apply to this job post because you previously "
@@ -117,11 +115,18 @@ class ApplicationService:
     # queries themselves stay in the repository; there's no business logic
     # to add here, this is purely a layering boundary.
     async def list_for_review(
-        self, *, job_post_id: uuid.UUID | None, status: str | None
+        self,
+        *,
+        job_post_id: uuid.UUID | None,
+        status: str | None,
+        applicant_id: uuid.UUID | None = None,
     ) -> Select:
         return await self.applications.list_for_review(
-            job_post_id=job_post_id, status=status
+            job_post_id=job_post_id, status=status, applicant_id=applicant_id
         )
+
+    async def list_applicants(self, *, search: str | None) -> Select:
+        return await self.applications.list_applicants(search=search)
 
     async def list_for_applicant(
         self, applicant_id: uuid.UUID, job_post_id: uuid.UUID | None = None
@@ -135,9 +140,7 @@ class ApplicationService:
     ) -> list[entities.AssessmentDeadlineExtension]:
         return await self.applications.list_deadline_extensions(application_id)
 
-    async def stats(
-        self, job_post_id: uuid.UUID | None = None
-    ) -> dict[str, object]:
+    async def stats(self, job_post_id: uuid.UUID | None = None) -> dict[str, object]:
         """Zero-filled status tally for the ATS dashboard (optionally scoped to
         one job post) — replaces the frontend firing one `size=1` list call per
         status and summing client-side."""
