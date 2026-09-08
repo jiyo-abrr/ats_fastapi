@@ -118,11 +118,11 @@ class ApplicationService:
         self,
         *,
         job_post_id: uuid.UUID | None,
-        status: str | None,
+        statuses: list[str] | None,
         applicant_id: uuid.UUID | None = None,
     ) -> Select:
         return await self.applications.list_for_review(
-            job_post_id=job_post_id, status=status, applicant_id=applicant_id
+            job_post_id=job_post_id, statuses=statuses, applicant_id=applicant_id
         )
 
     async def list_applicants(self, *, search: str | None) -> Select:

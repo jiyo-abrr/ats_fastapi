@@ -133,7 +133,7 @@ class ApplicationRepository(
         self,
         *,
         job_post_id: uuid.UUID | None,
-        status: str | None,
+        statuses: list[str] | None,
         applicant_id: uuid.UUID | None = None,
     ) -> Select:
         query = (
@@ -154,8 +154,8 @@ class ApplicationRepository(
         )
         if job_post_id is not None:
             query = query.where(ApplicationModel.job_post_id == job_post_id)
-        if status is not None:
-            query = query.where(ApplicationModel.status == status)
+        if statuses:
+            query = query.where(ApplicationModel.status.in_(statuses))
         if applicant_id is not None:
             query = query.where(ApplicationModel.applicant_id == applicant_id)
         return query

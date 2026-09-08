@@ -481,11 +481,11 @@ class TestListForReview:
         applicant_id = uuid.uuid4()
 
         await service.list_for_review(
-            job_post_id=None, status=None, applicant_id=applicant_id
+            job_post_id=None, statuses=None, applicant_id=applicant_id
         )
 
         applications.list_for_review.assert_called_once_with(
-            job_post_id=None, status=None, applicant_id=applicant_id
+            job_post_id=None, statuses=None, applicant_id=applicant_id
         )
 
 

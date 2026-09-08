@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,13 +93,15 @@ async def application_stats(
 )
 async def list_applications(
     job_post_id: uuid.UUID | None = None,
-    status: ApplicationStatus | None = None,
+    status: list[ApplicationStatus] | None = Query(None),
     applicant_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationReviewOut]:
     query = await service.list_for_review(
-        job_post_id=job_post_id, status=status, applicant_id=applicant_id
+        job_post_id=job_post_id,
+        statuses=[s.value for s in status] if status else None,
+        applicant_id=applicant_id,
     )
     return await apaginate(
         db,
