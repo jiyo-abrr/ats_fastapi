@@ -1,7 +1,24 @@
-from app.core.exceptions import ConflictError, UnauthorizedError, ValidationError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    UnauthorizedError,
+    ValidationError,
+)
 
 
 class EmailAlreadyRegisteredError(ConflictError):
+    pass
+
+
+class UserNotFoundError(NotFoundError):
+    pass
+
+
+class AccountDeactivatedError(UnauthorizedError):
+    pass
+
+
+class InvalidRoleForActionError(ValidationError):
     pass
 
 

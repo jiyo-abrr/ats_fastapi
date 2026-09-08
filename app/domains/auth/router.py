@@ -1,9 +1,24 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
-from pydantic import EmailStr
+import uuid
+from typing import Literal
 
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_querybuilder import QueryBuilder
+from pydantic import EmailStr
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.core.database import get_db
 from app.core.rate_limit import rate_limit
 from app.domains.auth import entities
-from app.domains.auth.dependencies import get_auth_service, get_current_user
+from app.domains.auth.dependencies import (
+    get_auth_service,
+    get_current_user,
+    get_user_repository,
+)
+from app.domains.auth.models import User as UserModel
+from app.domains.auth.repository import UserRepository
 from app.domains.auth.schemas import (
     AccessTokenResponse,
     CreateHrAccountRequest,
@@ -12,9 +27,13 @@ from app.domains.auth.schemas import (
     SignupResponse,
     TokenResponse,
     UserOut,
+    UserUpdateRequest,
 )
 from app.domains.auth.service import AuthService
 from app.domains.rbac.dependencies import require_permission
+from app.domains.rbac.models import Role as RoleModel
+
+_manage_hr_accounts = Depends(require_permission("manage_hr_accounts"))
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -67,6 +86,65 @@ async def create_hr_account(
         email=payload.email,
         password=payload.password,
     )
+
+
+@router.get("/users", response_model=Page[UserOut], dependencies=[_manage_hr_accounts])
+async def list_users(
+    scope: Literal["staff", "applicants"] | None = Query(None),
+    query=QueryBuilder(UserModel),
+    db: AsyncSession = Depends(get_db),
+    repo: UserRepository = Depends(get_user_repository),
+) -> Page[UserOut]:
+    # Eager-load role so repo.map_many's _to_entity call (obj.role.name)
+    # doesn't trigger a MissingGreenlet lazy-load on the paginated rows.
+    query = query.options(selectinload(UserModel.role))
+    if scope == "staff":
+        query = query.join(UserModel.role).where(RoleModel.name.in_(["admin", "hr"]))
+    elif scope == "applicants":
+        query = query.join(UserModel.role).where(RoleModel.name == "applicant")
+    return await apaginate(db, query, transformer=repo.map_many)
+
+
+@router.get(
+    "/users/{user_id}", response_model=UserOut, dependencies=[_manage_hr_accounts]
+)
+async def get_user(
+    user_id: uuid.UUID, auth_service: AuthService = Depends(get_auth_service)
+) -> UserOut:
+    return await auth_service.get_user(user_id)
+
+
+@router.put(
+    "/users/{user_id}", response_model=UserOut, dependencies=[_manage_hr_accounts]
+)
+async def update_user(
+    user_id: uuid.UUID,
+    payload: UserUpdateRequest,
+    auth_service: AuthService = Depends(get_auth_service),
+) -> UserOut:
+    return await auth_service.update_user(user_id, **payload.model_dump())
+
+
+@router.post(
+    "/users/{user_id}/deactivate",
+    response_model=UserOut,
+    dependencies=[_manage_hr_accounts],
+)
+async def deactivate_user(
+    user_id: uuid.UUID, auth_service: AuthService = Depends(get_auth_service)
+) -> UserOut:
+    return await auth_service.set_applicant_active(user_id, is_active=False)
+
+
+@router.post(
+    "/users/{user_id}/activate",
+    response_model=UserOut,
+    dependencies=[_manage_hr_accounts],
+)
+async def activate_user(
+    user_id: uuid.UUID, auth_service: AuthService = Depends(get_auth_service)
+) -> UserOut:
+    return await auth_service.set_applicant_active(user_id, is_active=True)
 
 
 @router.post(

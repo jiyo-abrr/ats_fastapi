@@ -17,11 +17,14 @@ from app.core.storage import upload_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.auth import entities
 from app.domains.auth.exceptions import (
+    AccountDeactivatedError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    InvalidRoleForActionError,
     ResumeTooLargeError,
     UnsupportedResumeTypeError,
+    UserNotFoundError,
 )
 from app.domains.auth.repository import RevokedRefreshTokenRepository, UserRepository
 from app.domains.auth.schemas import (
@@ -153,10 +156,59 @@ class AuthService:
 
         return UserOut.model_validate(user)
 
+    async def get_user(self, user_id: uuid.UUID) -> UserOut:
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User '{user_id}' not found")
+        return UserOut.model_validate(user)
+
+    async def update_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        first_name: str,
+        middle_initial: str | None,
+        last_name: str,
+        contact_number: str,
+        email: str,
+    ) -> UserOut:
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User '{user_id}' not found")
+
+        if email != user.email and await self.users.get_by_email(email) is not None:
+            raise EmailAlreadyRegisteredError("Email is already registered")
+
+        user.first_name = first_name
+        user.middle_initial = middle_initial
+        user.last_name = last_name
+        user.contact_number = contact_number
+        user.email = email
+        await self.users.update(user)
+        await self.uow.commit()
+        return UserOut.model_validate(await self.users.get_by_id(user_id))
+
+    async def set_applicant_active(
+        self, user_id: uuid.UUID, *, is_active: bool
+    ) -> UserOut:
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User '{user_id}' not found")
+        if user.role != "applicant":
+            raise InvalidRoleForActionError(
+                "Only applicant accounts can be deactivated here"
+            )
+
+        await self.users.set_active(user_id, is_active)
+        await self.uow.commit()
+        return UserOut.model_validate(await self.users.get_by_id(user_id))
+
     async def login(self, email: str, password: str) -> TokenResponse:
         user = await self.users.get_by_email(email)
         if user is None or not verify_password(password, user.password_hash):
             raise InvalidCredentialsError("Invalid email or password")
+        if not user.is_active:
+            raise AccountDeactivatedError("This account has been deactivated")
 
         return TokenResponse(
             access_token=create_access_token(user.id),
@@ -169,7 +221,8 @@ class AuthService:
         if await self.revoked_tokens.is_revoked(token.jti):
             raise InvalidRefreshTokenError("Invalid refresh token")
 
-        if await self.users.get_by_id(token.user_id) is None:
+        user = await self.users.get_by_id(token.user_id)
+        if user is None or not user.is_active:
             raise InvalidRefreshTokenError("Invalid refresh token")
 
         return AccessTokenResponse(access_token=create_access_token(token.user_id))

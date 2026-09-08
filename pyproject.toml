@@ -12,6 +12,7 @@ dependencies = [
     "fastapi-pagination>=0.15.16",
     "fastapi-querybuilder>=0.1.18",
     "fastapi[standard]>=0.141.1",
+    "greenlet>=3.5.5",
     "minio>=7.2.20",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",

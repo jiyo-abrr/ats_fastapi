@@ -54,6 +54,6 @@ async def get_current_user(
         raise InvalidAccessTokenError(_CREDENTIALS_ERROR_MESSAGE) from exc
 
     user = await users.get_by_id(token.user_id)
-    if user is None:
+    if user is None or not user.is_active:
         raise InvalidAccessTokenError(_CREDENTIALS_ERROR_MESSAGE)
     return user

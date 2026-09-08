@@ -14,6 +14,7 @@ class UserOut(BaseModel):
     contact_number: str
     email: EmailStr
     role: str
+    is_active: bool
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +31,14 @@ class CreateHrAccountRequest(BaseModel):
     contact_number: str
     email: EmailStr
     password: str
+
+
+class UserUpdateRequest(BaseModel):
+    first_name: str
+    middle_initial: str | None = None
+    last_name: str
+    contact_number: str
+    email: EmailStr
 
 
 class RefreshRequest(BaseModel):

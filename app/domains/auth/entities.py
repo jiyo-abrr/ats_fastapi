@@ -15,6 +15,7 @@ class User:
     role_id: uuid.UUID
     role: str
     resume_object_key: str | None
+    is_active: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

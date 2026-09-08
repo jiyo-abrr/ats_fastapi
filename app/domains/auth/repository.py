@@ -24,6 +24,7 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             role_id=obj.role_id,
             role=obj.role.name,
             resume_object_key=obj.resume_object_key,
+            is_active=obj.is_active,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -58,6 +59,22 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             select(UserModel).options(selectinload(UserModel.role))
         )
         return [await self._to_entity(obj) for obj in result.scalars().all()]
+
+    async def update(self, entity: entities.User) -> None:
+        obj = await self.db.get(UserModel, entity.id)
+        if obj is None:
+            return
+        obj.first_name = entity.first_name
+        obj.middle_initial = entity.middle_initial
+        obj.last_name = entity.last_name
+        obj.contact_number = entity.contact_number
+        obj.email = entity.email
+
+    async def set_active(self, id: uuid.UUID, is_active: bool) -> None:
+        obj = await self.db.get(UserModel, id)
+        if obj is None:
+            return
+        obj.is_active = is_active
 
     async def get_by_email(self, email: str) -> entities.User | None:
         result = await self.db.execute(
