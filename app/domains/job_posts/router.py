@@ -56,9 +56,7 @@ async def list_job_posts(
     return await apaginate(db, query, transformer=repo.map_many)
 
 
-@router.get(
-    "/stats", response_model=JobPostStatsOut, dependencies=[_manage_jobs]
-)
+@router.get("/stats", response_model=JobPostStatsOut, dependencies=[_manage_jobs])
 async def job_post_stats(
     service: JobPostService = Depends(get_job_post_service),
 ) -> JobPostStatsOut:

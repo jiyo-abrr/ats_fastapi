@@ -58,6 +58,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             qualifications=obj.qualifications,
             salary_min=obj.salary_min,
             salary_max=obj.salary_max,
+            currency=obj.currency,
             employment_type=obj.employment_type,
             status=obj.status,
             company_address_id=obj.company_address_id,
@@ -91,6 +92,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             qualifications=entity.qualifications,
             salary_min=entity.salary_min,
             salary_max=entity.salary_max,
+            currency=entity.currency,
             employment_type=entity.employment_type,
             status=entity.status,
             company_address_id=entity.company_address_id,
@@ -109,9 +111,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         return await self._to_entity(obj) if obj is not None else None
 
     async def list_all(self) -> list[entities.JobPost]:
-        result = await self.db.execute(
-            select(JobPostModel).options(*_EAGER_OPTIONS)
-        )
+        result = await self.db.execute(select(JobPostModel).options(*_EAGER_OPTIONS))
         return [await self._to_entity(obj) for obj in result.scalars().all()]
 
     async def status_counts(self) -> dict[str, int]:
@@ -132,6 +132,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         obj.qualifications = entity.qualifications
         obj.salary_min = entity.salary_min
         obj.salary_max = entity.salary_max
+        obj.currency = entity.currency
         obj.employment_type = entity.employment_type
         obj.status = entity.status
         obj.company_address_id = entity.company_address_id
@@ -165,9 +166,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
     async def remove_exclusion(
         self, job_post_id: uuid.UUID, excluded_job_post_id: uuid.UUID
     ) -> None:
-        row = await self.db.get(
-            JobPostExclusion, (job_post_id, excluded_job_post_id)
-        )
+        row = await self.db.get(JobPostExclusion, (job_post_id, excluded_job_post_id))
         if row is not None:
             await self.db.delete(row)
 
@@ -176,9 +175,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
     # enforcing "at most one per job post") -----------------------------
 
     async def has_pre_assessment_template(self, job_post_id: uuid.UUID) -> bool:
-        return (
-            await self.db.get(JobPostPreAssessmentTemplate, job_post_id) is not None
-        )
+        return await self.db.get(JobPostPreAssessmentTemplate, job_post_id) is not None
 
     async def set_pre_assessment_template(
         self, job_post_id: uuid.UUID, template_id: uuid.UUID

@@ -27,6 +27,7 @@ from app.domains.job_posts import entities
 from app.domains.job_posts.enums import JobPostStatus
 from app.domains.job_posts.exceptions import (
     AssessmentTemplateAlreadyAttachedError,
+    JobPostAssessmentsIncompleteError,
     JobPostNotFoundError,
 )
 from app.domains.job_posts.repository import JobPostRepository
@@ -100,6 +101,7 @@ class JobPostService:
         qualifications: str,
         salary_min: Decimal | None,
         salary_max: Decimal | None,
+        currency: str,
         employment_type: str,
         status: str,
         company_address_id: uuid.UUID,
@@ -148,6 +150,16 @@ class JobPostService:
                 f"'{technical_assessment_template_id}' not found"
             )
 
+        if status == JobPostStatus.PUBLISHED and not (
+            pre_assessment_template_id
+            and culture_fit_template_id
+            and technical_assessment_template_id
+        ):
+            raise JobPostAssessmentsIncompleteError(
+                "A job post needs all three assessments (pre-assessment, culture fit, "
+                "technical) attached before it can be published"
+            )
+
         job_post_id = uuid.uuid4()
         await self.job_posts.add(
             entities.JobPost(
@@ -158,6 +170,7 @@ class JobPostService:
                 qualifications=qualifications,
                 salary_min=salary_min,
                 salary_max=salary_max,
+                currency=currency,
                 employment_type=employment_type,
                 status=status,
                 company_address_id=company_address_id,
@@ -202,13 +215,23 @@ class JobPostService:
         qualifications: str,
         salary_min: Decimal | None,
         salary_max: Decimal | None,
+        currency: str,
         employment_type: str,
         status: str,
         company_address_id: uuid.UUID,
         position_id: uuid.UUID,
         assessment_window_days: int = 4,
     ) -> entities.JobPost:
-        await self.get(job_post_id)
+        existing = await self.get(job_post_id)
+        if status == JobPostStatus.PUBLISHED and not (
+            existing.pre_assessment_template_id
+            and existing.culture_fit_template_id
+            and existing.technical_assessment_template_id
+        ):
+            raise JobPostAssessmentsIncompleteError(
+                "A job post needs all three assessments (pre-assessment, culture fit, "
+                "technical) attached before it can be published"
+            )
         address = await self._require_address(company_address_id)
         position = await self._require_position(position_id)
 
@@ -221,6 +244,7 @@ class JobPostService:
                 qualifications=qualifications,
                 salary_min=salary_min,
                 salary_max=salary_max,
+                currency=currency,
                 employment_type=employment_type,
                 status=status,
                 company_address_id=company_address_id,
@@ -293,7 +317,12 @@ class JobPostService:
     async def remove_pre_assessment_template(
         self, job_post_id: uuid.UUID
     ) -> entities.JobPost:
-        await self.get(job_post_id)
+        job_post = await self.get(job_post_id)
+        if job_post.status == JobPostStatus.PUBLISHED:
+            raise JobPostAssessmentsIncompleteError(
+                "Cannot detach an assessment from a published job post — "
+                "move it back to draft first"
+            )
         await self.job_posts.remove_pre_assessment_template(job_post_id)
         await self.uow.commit()
         return await self.job_posts.get_by_id(job_post_id)
@@ -308,8 +337,7 @@ class JobPostService:
             )
         if await self.job_posts.has_culture_fit_template(job_post_id):
             raise AssessmentTemplateAlreadyAttachedError(
-                f"Job post '{job_post_id}' already has a culture-fit "
-                "template attached"
+                f"Job post '{job_post_id}' already has a culture-fit template attached"
             )
         await self.job_posts.set_culture_fit_template(job_post_id, template_id)
         await self.uow.commit()
@@ -318,7 +346,12 @@ class JobPostService:
     async def remove_culture_fit_template(
         self, job_post_id: uuid.UUID
     ) -> entities.JobPost:
-        await self.get(job_post_id)
+        job_post = await self.get(job_post_id)
+        if job_post.status == JobPostStatus.PUBLISHED:
+            raise JobPostAssessmentsIncompleteError(
+                "Cannot detach an assessment from a published job post — "
+                "move it back to draft first"
+            )
         await self.job_posts.remove_culture_fit_template(job_post_id)
         await self.uow.commit()
         return await self.job_posts.get_by_id(job_post_id)
@@ -336,16 +369,19 @@ class JobPostService:
                 f"Job post '{job_post_id}' already has a technical "
                 "assessment template attached"
             )
-        await self.job_posts.set_technical_assessment_template(
-            job_post_id, template_id
-        )
+        await self.job_posts.set_technical_assessment_template(job_post_id, template_id)
         await self.uow.commit()
         return await self.job_posts.get_by_id(job_post_id)
 
     async def remove_technical_assessment_template(
         self, job_post_id: uuid.UUID
     ) -> entities.JobPost:
-        await self.get(job_post_id)
+        job_post = await self.get(job_post_id)
+        if job_post.status == JobPostStatus.PUBLISHED:
+            raise JobPostAssessmentsIncompleteError(
+                "Cannot detach an assessment from a published job post — "
+                "move it back to draft first"
+            )
         await self.job_posts.remove_technical_assessment_template(job_post_id)
         await self.uow.commit()
         return await self.job_posts.get_by_id(job_post_id)

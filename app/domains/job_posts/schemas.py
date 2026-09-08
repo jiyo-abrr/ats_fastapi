@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domains.job_posts.enums import EmploymentType, JobPostStatus
+from app.domains.job_posts.enums import Currency, EmploymentType, JobPostStatus
 from app.domains.tags.schemas import TagOut
 
 
@@ -15,6 +15,7 @@ class JobPostCreate(BaseModel):
     qualifications: str
     salary_min: Decimal | None = None
     salary_max: Decimal | None = None
+    currency: Currency = Currency.PHP
     employment_type: EmploymentType
     status: JobPostStatus = JobPostStatus.DRAFT
     company_address_id: uuid.UUID
@@ -34,6 +35,7 @@ class JobPostUpdate(BaseModel):
     qualifications: str
     salary_min: Decimal | None = None
     salary_max: Decimal | None = None
+    currency: Currency = Currency.PHP
     employment_type: EmploymentType
     status: JobPostStatus
     company_address_id: uuid.UUID
@@ -58,6 +60,7 @@ class JobPostOut(BaseModel):
     qualifications: str
     salary_min: Decimal | None
     salary_max: Decimal | None
+    currency: str
     employment_type: str
     status: str
     company_address_id: uuid.UUID

@@ -450,6 +450,44 @@ class TestGetAttemptDetail:
             await service.get_attempt_detail(attempt.id, user)
 
 
+class TestListReviewForApplication:
+    async def test_pairs_each_question_with_its_answer(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        q1 = make_question(order_index=1, prompt="Q1")
+        q2 = make_question(order_index=2, prompt="Q2")
+        ans = make_answer(
+            question_id=q1.id, answer_value=4, answered_at=datetime.now(UTC)
+        )
+        attempt = make_attempt(status=AttemptStatus.IN_PROGRESS, answers=[ans])
+        attempts.list_for_application.return_value = [attempt]
+        templates.get_by_id.return_value = make_template(
+            title="Tech", questions=[q2, q1]
+        )
+
+        reviews = await service.list_review_for_application(attempt.application_id)
+
+        assert len(reviews) == 1
+        r = reviews[0]
+        assert r["template_title"] == "Tech"
+        assert r["total_questions"] == 2
+        assert r["answered_count"] == 1
+        assert r["reopen_count"] == 0
+        assert [q["prompt"] for q in r["questions"]] == ["Q1", "Q2"]
+        assert r["questions"][0]["answer_value"] == 4
+        assert r["questions"][1]["answer_value"] is None
+
+    async def test_missing_template_yields_empty_question_list(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        attempt = make_attempt()
+        attempts.list_for_application.return_value = [attempt]
+        templates.get_by_id.return_value = None
+
+        reviews = await service.list_review_for_application(attempt.application_id)
+
+        assert reviews[0]["questions"] == []
+        assert reviews[0]["total_questions"] == 0
+
+
 class TestTotalQuestionsEnrichment:
     async def test_list_for_application_sets_total_questions_from_template(self):
         service, attempts, templates, job_posts, applications, uow = make_service()

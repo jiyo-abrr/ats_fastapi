@@ -21,6 +21,7 @@ class JobPost:
     company_address_label: str
     position_id: uuid.UUID
     position_title: str
+    currency: str = "PHP"
     assessment_window_days: int = 4
     tags: list[Tag] = field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = field(default_factory=list)

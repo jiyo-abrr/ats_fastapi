@@ -22,7 +22,10 @@ from app.domains.applications.schemas import (
 )
 from app.domains.applications.service import ApplicationService
 from app.domains.assessments.attempts.dependencies import get_assessment_service
-from app.domains.assessments.attempts.schemas import AssessmentAttemptOut
+from app.domains.assessments.attempts.schemas import (
+    AssessmentAttemptOut,
+    AttemptReviewOut,
+)
 from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
@@ -188,6 +191,24 @@ async def extend_assessment_deadline(
         reason=payload.reason,
         current_user=current_user,
     )
+
+
+@router.get(
+    "/{application_id}/assessments/review",
+    response_model=list[AttemptReviewOut],
+    dependencies=[_manage_applications],
+)
+async def get_application_assessments_review(
+    application_id: uuid.UUID,
+    current_user: auth_entities.User = Depends(get_current_user),
+    service: ApplicationService = Depends(get_application_service),
+    assessment_service: AssessmentService = Depends(get_assessment_service),
+) -> list[AttemptReviewOut]:
+    # Reuses ApplicationService.get() for the existence + access check
+    # (the route's _manage_applications dep already gates the permission).
+    await service.get(application_id, current_user)
+    reviews = await assessment_service.list_review_for_application(application_id)
+    return [AttemptReviewOut.model_validate(r) for r in reviews]
 
 
 @router.get(

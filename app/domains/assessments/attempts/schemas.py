@@ -57,6 +57,32 @@ class AssessmentAttemptOut(BaseModel):
         return self
 
 
+class AttemptReviewQuestionOut(BaseModel):
+    question_id: uuid.UUID
+    order_index: int
+    prompt: str
+    question_type: str
+    answer_value: Any | None = None
+    answered_at: datetime | None = None
+
+
+class AttemptReviewOut(BaseModel):
+    """GET /applications/{id}/assessments/review — HR/admin view of one
+    applicant's attempts with every question prompt and its answer, for
+    side-by-side candidate comparison. Never exposed to applicants."""
+
+    attempt_id: uuid.UUID
+    template_type: str
+    template_title: str
+    status: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    total_questions: int
+    answered_count: int
+    reopen_count: int
+    questions: list[AttemptReviewQuestionOut]
+
+
 class CurrentQuestionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

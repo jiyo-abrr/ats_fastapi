@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.domains.company_addresses.models import CompanyAddress
-from app.domains.job_posts.enums import EmploymentType, JobPostStatus
+from app.domains.job_posts.enums import Currency, EmploymentType, JobPostStatus
 from app.domains.positions.models import Position
 
 
@@ -33,6 +33,10 @@ class JobPost(Base):
             "status IN (" + ", ".join(f"'{s.value}'" for s in JobPostStatus) + ")",
             name="ck_job_posts_status",
         ),
+        CheckConstraint(
+            "currency IN (" + ", ".join(f"'{c.value}'" for c in Currency) + ")",
+            name="ck_job_posts_currency",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -44,6 +48,9 @@ class JobPost(Base):
     qualifications: Mapped[str] = mapped_column(String(10000), nullable=False)
     salary_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     salary_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default=Currency.PHP.value
+    )
     employment_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=JobPostStatus.DRAFT.value

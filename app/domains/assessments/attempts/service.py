@@ -307,6 +307,59 @@ class AssessmentService:
             await self._with_total_questions(attempt)
         return attempts
 
+    async def list_review_for_application(
+        self, application_id: uuid.UUID
+    ) -> list[dict]:
+        """HR/admin comparison view: every attempt for an application, each
+        with its full question list and the applicant's live answers. Unlike
+        get_attempt_detail (applicant-facing, current question only) this
+        exposes the whole attempt at once."""
+        attempts = await self.attempts.list_for_application(application_id)
+        reviews: list[dict] = []
+        for attempt in attempts:
+            template = await self._get_template(
+                attempt.template_type, attempt.template_id
+            )
+            answers_by_question = {a.question_id: a for a in attempt.answers}
+            questions = list(template.questions) if template else []
+            questions.sort(key=lambda q: q.order_index)
+            answered_count = sum(
+                1 for a in attempt.answers if a.answer_value is not None
+            )
+            reviews.append(
+                {
+                    "attempt_id": attempt.id,
+                    "template_type": attempt.template_type,
+                    "template_title": template.title if template else "",
+                    "status": attempt.status,
+                    "started_at": attempt.started_at,
+                    "completed_at": attempt.completed_at,
+                    "total_questions": len(questions),
+                    "answered_count": answered_count,
+                    "reopen_count": len(attempt.reopens),
+                    "questions": [
+                        {
+                            "question_id": q.id,
+                            "order_index": q.order_index,
+                            "prompt": q.prompt,
+                            "question_type": q.question_type,
+                            "answer_value": (
+                                answers_by_question[q.id].answer_value
+                                if q.id in answers_by_question
+                                else None
+                            ),
+                            "answered_at": (
+                                answers_by_question[q.id].answered_at
+                                if q.id in answers_by_question
+                                else None
+                            ),
+                        }
+                        for q in questions
+                    ],
+                }
+            )
+        return reviews
+
     async def get_attempt_detail(
         self, attempt_id: uuid.UUID, current_user: auth_entities.User
     ) -> entities.AttemptDetail:
