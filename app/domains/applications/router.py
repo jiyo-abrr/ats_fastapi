@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -6,8 +7,20 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.domains.applications.dependencies import get_application_service
+from app.domains.applications.dependencies import (
+    get_application_service,
+    get_evaluation_service,
+)
 from app.domains.applications.enums import ApplicationStatus
+from app.domains.applications.evaluations import (
+    ApplicationEvaluationOut,
+    EvaluationImportIn,
+    EvaluationImportResultOut,
+    EvaluationService,
+    JobEvaluationRowOut,
+)
+from app.domains.applications.exceptions import ResumeUnavailableError
+from app.domains.applications.export import build_evaluation_pack
 from app.domains.applications.schemas import (
     ApplicantSummaryOut,
     ApplicationAssessmentsOut,
@@ -20,6 +33,7 @@ from app.domains.applications.schemas import (
     ApplicationSummaryOut,
     AssessmentDeadlineExtensionOut,
     AttemptSummaryOut,
+    EvaluationSummaryOut,
     ExtendAssessmentDeadlineRequest,
     JobAssessmentReviewRowOut,
 )
@@ -32,6 +46,8 @@ from app.domains.assessments.attempts.schemas import (
 from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
+from app.domains.job_posts.dependencies import get_job_post_service
+from app.domains.job_posts.service import JobPostService
 from app.domains.rbac.dependencies import require_permission
 
 _manage_applications = Depends(require_permission("manage_applications"))
@@ -141,13 +157,14 @@ async def assessment_scorecard(
     db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
     assessment_service: AssessmentService = Depends(get_assessment_service),
+    evaluations: EvaluationService = Depends(get_evaluation_service),
 ) -> Page[ApplicationScorecardOut]:
     query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
 
     async def _transform(rows):
-        summaries = await assessment_service.summaries_for_applications(
-            [r.id for r in rows]
-        )
+        ids = [r.id for r in rows]
+        summaries = await assessment_service.summaries_for_applications(ids)
+        evals = await evaluations.latest_summaries_for_applications(ids)
         return [
             ApplicationScorecardOut(
                 id=r.id,
@@ -159,6 +176,9 @@ async def assessment_scorecard(
                 assessments=[
                     AttemptSummaryOut(**summary) for summary in summaries.get(r.id, [])
                 ],
+                evaluation=(
+                    EvaluationSummaryOut(**evals[r.id]) if r.id in evals else None
+                ),
             )
             for r in rows
         ]
@@ -200,6 +220,118 @@ async def job_assessment_review(
         return out
 
     return await apaginate(db, query, transformer=_transform)
+
+
+@router.get("/export", dependencies=[_manage_applications])
+async def export_evaluation_pack(
+    job_post_id: uuid.UUID,
+    current_user: auth_entities.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    service: ApplicationService = Depends(get_application_service),
+    assessment_service: AssessmentService = Depends(get_assessment_service),
+    job_post_service: JobPostService = Depends(get_job_post_service),
+) -> Response:
+    """ZIP for external AI evaluation: job spec + rubric + every applicant's
+    résumé and assessment answers."""
+    job = await job_post_service.get(job_post_id)
+    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
+    rows = (await db.execute(query)).all()
+
+    applicants: list[dict] = []
+    for row in rows:
+        try:
+            data, _content_type, filename = await service.get_resume(
+                row.id, current_user
+            )
+            resume = (data, filename)
+        except ResumeUnavailableError:
+            resume = None
+        reviews = await assessment_service.list_review_for_application(row.id)
+        applicants.append({"row": row, "resume": resume, "reviews": reviews})
+
+    payload = build_evaluation_pack(job=job, applicants=applicants)
+    slug = re.sub(r"[^a-z0-9]+", "-", job.job_title.lower()).strip("-") or "job"
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{slug}-evaluation-pack.zip"'
+            )
+        },
+    )
+
+
+@router.get(
+    "/evaluations",
+    response_model=Page[JobEvaluationRowOut],
+    dependencies=[_manage_applications],
+)
+async def job_evaluations(
+    job_post_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    service: ApplicationService = Depends(get_application_service),
+    evaluations: EvaluationService = Depends(get_evaluation_service),
+) -> Page[JobEvaluationRowOut]:
+    """One row per applicant with their full latest AI evaluation (recommendation,
+    fit score, per-dimension scores) — for the Compare tab's side-by-side view."""
+    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
+
+    async def _transform(rows):
+        full = await evaluations.latest_full_for_applications([r.id for r in rows])
+        return [
+            JobEvaluationRowOut(
+                application_id=r.id,
+                applicant_first_name=r.applicant_first_name,
+                applicant_last_name=r.applicant_last_name,
+                applicant_email=r.applicant_email,
+                evaluation=full.get(r.id),
+            )
+            for r in rows
+        ]
+
+    return await apaginate(db, query, transformer=_transform)
+
+
+@router.get("/evaluations/export", dependencies=[_manage_applications])
+async def export_evaluations_csv(
+    job_post_id: uuid.UUID,
+    evaluations: EvaluationService = Depends(get_evaluation_service),
+) -> Response:
+    """Flat CSV: latest AI evaluation per applicant, one column per dimension."""
+    csv_text = await evaluations.evaluation_csv(job_post_id)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="evaluations.csv"'},
+    )
+
+
+@router.post(
+    "/evaluations/import",
+    response_model=EvaluationImportResultOut,
+    dependencies=[_manage_applications],
+)
+async def import_evaluations(
+    payload: EvaluationImportIn,
+    current_user: auth_entities.User = Depends(get_current_user),
+    evaluations: EvaluationService = Depends(get_evaluation_service),
+) -> EvaluationImportResultOut:
+    return await evaluations.import_results(
+        payload, imported_by_user_id=current_user.id
+    )
+
+
+@router.get(
+    "/{application_id}/evaluation",
+    response_model=ApplicationEvaluationOut,
+    dependencies=[_manage_applications],
+)
+async def get_application_evaluation(
+    application_id: uuid.UUID,
+    evaluations: EvaluationService = Depends(get_evaluation_service),
+) -> ApplicationEvaluationOut:
+    return await evaluations.get_for_application(application_id)
 
 
 @router.get("/{application_id}", response_model=ApplicationOut)

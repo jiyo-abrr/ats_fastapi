@@ -60,3 +60,10 @@ def require_permission(
             )
 
     return dependency
+
+
+async def require_admin(
+    current_user: auth_entities.User = Depends(get_current_user),
+) -> None:
+    if current_user.role != "admin":
+        raise PermissionDeniedError("Administrator access is required")

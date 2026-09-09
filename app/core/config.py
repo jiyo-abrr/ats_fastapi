@@ -18,5 +18,12 @@ class Settings(BaseSettings):
 
     redis_url: str
 
+    # Comma-separated list of allowed CORS origins (e.g. "http://localhost:5173,http://192.168.1.59:5173")
+    cors_allow_origins: str = "*"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
 
 settings = Settings()

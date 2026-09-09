@@ -113,6 +113,11 @@ class AttemptSummaryOut(BaseModel):
     completed_at: datetime | None = None
 
 
+class EvaluationSummaryOut(BaseModel):
+    recommendation: str | None = None
+    fit_score: int | None = None
+
+
 class ApplicationScorecardOut(BaseModel):
     """GET /applications/assessment-scorecard — one row per applicant to a job
     post with a compact per-assessment roll-up, for the Compare tab."""
@@ -126,6 +131,7 @@ class ApplicationScorecardOut(BaseModel):
     applicant_last_name: str
     applicant_email: str
     assessments: list[AttemptSummaryOut] = Field(default_factory=list)
+    evaluation: EvaluationSummaryOut | None = None
 
 
 class ApplicationSummaryOut(BaseModel):

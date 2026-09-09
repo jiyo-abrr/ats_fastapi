@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.domains.analytics.router import router as analytics_router
 from app.domains.applications.router import router as application_router
 from app.domains.assessments.attempts.router import router as assessment_router
 from app.domains.assessments.culture_fit_templates.router import (
@@ -20,6 +21,7 @@ from app.domains.tags.router import router as tag_router
 
 v1_router = APIRouter(prefix="/api/v1")
 v1_router.include_router(auth_router)
+v1_router.include_router(analytics_router)
 v1_router.include_router(rbac_router)
 v1_router.include_router(company_address_router)
 v1_router.include_router(position_router)
