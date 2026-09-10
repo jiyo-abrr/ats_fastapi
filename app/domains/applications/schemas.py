@@ -144,6 +144,9 @@ class ApplicationSummaryOut(BaseModel):
     created_at: datetime
     job_post_id: uuid.UUID
     job_title: str
+    # True while the application is in `interview`, HR has proposed times and
+    # the applicant has not picked one yet — drives the "pick a time" nudge.
+    needs_interview_pick: bool = False
 
 
 class AssessmentDeadlineExtensionOut(BaseModel):

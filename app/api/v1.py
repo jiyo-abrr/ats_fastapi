@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.domains.analytics.router import router as analytics_router
 from app.domains.applications.router import router as application_router
+from app.domains.applications.router import scheduling_router
 from app.domains.assessments.attempts.router import router as assessment_router
 from app.domains.assessments.culture_fit_templates.router import (
     router as culture_fit_template_router,
@@ -31,4 +32,5 @@ v1_router.include_router(culture_fit_template_router)
 v1_router.include_router(technical_assessment_template_router)
 v1_router.include_router(job_post_router)
 v1_router.include_router(application_router)
+v1_router.include_router(scheduling_router)
 v1_router.include_router(assessment_router)
