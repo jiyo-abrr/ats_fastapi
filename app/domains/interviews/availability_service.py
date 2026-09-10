@@ -16,14 +16,20 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.models import (
-    Application,
+from app.domains.applications.models import Application
+from app.domains.auth.models import User
+from app.domains.interviews.exceptions import (
+    ApplicationNotInInterviewError,
+    InterviewApplicationNotFoundError,
+    InterviewJobPostNotFoundError,
+    InvalidAvailabilityWindowError,
+    UnknownInterviewerError,
+)
+from app.domains.interviews.models import (
     InterviewAvailabilityRule,
     InterviewConfig,
     InterviewDateOverride,
@@ -31,154 +37,27 @@ from app.domains.applications.models import (
     InterviewSlot,
     JobPostInterviewer,
 )
-from app.domains.auth.models import User
+from app.domains.interviews.schemas import (
+    _WEEKDAYS,
+    AvailabilityWindowIn,
+    AvailabilityWindowOut,
+    DateOverrideIn,
+    DateOverrideOut,
+    DateOverridesIn,
+    GlobalAvailabilityIn,
+    GlobalAvailabilityOut,
+    InterviewConfigOut,
+    InterviewerOut,
+    JobPostAvailabilityIn,
+    JobPostAvailabilityOut,
+    OpenSlotOut,
+    _hhmm_to_minutes,
+    _minutes_to_hhmm,
+)
 from app.domains.job_posts.models import JobPost
 from app.domains.rbac.models import Role
 
 _CONFIG_ID = 1
-_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-
-# --------------------------------------------------------------------------- IO
-
-
-def _hhmm_to_minutes(value: str) -> int:
-    try:
-        h, m = (int(p) for p in value.split(":"))
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(f"'{value}' is not a HH:MM time") from exc
-    if not (0 <= h <= 24 and 0 <= m < 60):
-        raise ValueError(f"'{value}' is out of range")
-    return h * 60 + m
-
-
-def _minutes_to_hhmm(value: int) -> str:
-    return f"{value // 60:02d}:{value % 60:02d}"
-
-
-class AvailabilityWindowIn(BaseModel):
-    weekday: int = Field(ge=0, le=6)
-    start: str  # "HH:MM"
-    end: str  # "HH:MM"
-
-    @field_validator("start", "end")
-    @classmethod
-    def _valid_time(cls, v: str) -> str:
-        _hhmm_to_minutes(v)
-        return v
-
-
-class AvailabilityWindowOut(BaseModel):
-    weekday: int
-    start: str
-    end: str
-
-
-class InterviewConfigIn(BaseModel):
-    slot_minutes: int = Field(ge=5, le=480)
-    horizon_days: int = Field(ge=1, le=120)
-    min_notice_hours: int = Field(ge=0, le=336)
-    timezone: str
-
-    @field_validator("timezone")
-    @classmethod
-    def _known_zone(cls, v: str) -> str:
-        try:
-            ZoneInfo(v)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError(f"'{v}' is not a known IANA timezone") from exc
-        return v
-
-
-class InterviewConfigOut(BaseModel):
-    slot_minutes: int
-    horizon_days: int
-    min_notice_hours: int
-    timezone: str
-
-
-class DateOverrideIn(BaseModel):
-    """A single-day or date-range exception. ``is_unavailable`` blocks the days
-    entirely; otherwise ``start``/``end`` (HH:MM) replace that day's weekly
-    windows."""
-
-    start_date: date
-    end_date: date | None = None
-    is_unavailable: bool = True
-    start: str | None = None  # "HH:MM"
-    end: str | None = None  # "HH:MM"
-    note: str | None = Field(default=None, max_length=200)
-
-    @model_validator(mode="after")
-    def _check(self) -> "DateOverrideIn":
-        self.end_date = self.end_date or self.start_date
-        if self.end_date < self.start_date:
-            raise ValueError("end_date must not be before start_date")
-        if self.is_unavailable:
-            self.start = self.end = None
-        else:
-            if not self.start or not self.end:
-                raise ValueError("a custom-hours override needs a start and end")
-            if _hhmm_to_minutes(self.end) <= _hhmm_to_minutes(self.start):
-                raise ValueError("override end time must be after its start")
-        self.note = (self.note or "").strip() or None
-        return self
-
-
-class DateOverrideOut(BaseModel):
-    id: uuid.UUID
-    start_date: date
-    end_date: date
-    is_unavailable: bool
-    start: str | None
-    end: str | None
-    note: str | None
-
-
-class GlobalAvailabilityIn(BaseModel):
-    config: InterviewConfigIn
-    windows: list[AvailabilityWindowIn] = Field(default_factory=list, max_length=60)
-
-
-class GlobalAvailabilityOut(BaseModel):
-    config: InterviewConfigOut
-    windows: list[AvailabilityWindowOut]
-    overrides: list[DateOverrideOut]
-
-
-class DateOverridesIn(BaseModel):
-    """The full set of global date overrides — a whole-list replace, so the
-    dedicated overrides page (and its CSV import) sends everything at once."""
-
-    overrides: list[DateOverrideIn] = Field(default_factory=list, max_length=365)
-
-
-class JobPostAvailabilityIn(BaseModel):
-    # An empty windows list means "use the global calendar for this job post".
-    windows: list[AvailabilityWindowIn] = Field(default_factory=list, max_length=60)
-    interviewer_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
-
-
-class InterviewerOut(BaseModel):
-    id: uuid.UUID
-    first_name: str
-    last_name: str
-    email: str
-
-
-class JobPostAvailabilityOut(BaseModel):
-    uses_custom_windows: bool
-    windows: list[AvailabilityWindowOut]  # effective (custom if any, else global)
-    interviewers: list[InterviewerOut]
-    config: InterviewConfigOut
-
-
-class OpenSlotOut(BaseModel):
-    starts_at: datetime
-    ends_at: datetime
-
-
-# ---------------------------------------------------------------------- service
 
 
 class InterviewAvailabilityService:
@@ -248,7 +127,7 @@ class InterviewAvailabilityService:
             start = _hhmm_to_minutes(window.start)
             end = _hhmm_to_minutes(window.end)
             if end <= start:
-                raise ValidationError(
+                raise InvalidAvailabilityWindowError(
                     f"{_WEEKDAYS[window.weekday]} window end must be after its start"
                 )
             self.db.add(
@@ -289,13 +168,9 @@ class InterviewAvailabilityService:
                 end_date=o.end_date,
                 is_unavailable=o.is_unavailable,
                 start=(
-                    None
-                    if o.start_minute is None
-                    else _minutes_to_hhmm(o.start_minute)
+                    None if o.start_minute is None else _minutes_to_hhmm(o.start_minute)
                 ),
-                end=(
-                    None if o.end_minute is None else _minutes_to_hhmm(o.end_minute)
-                ),
+                end=(None if o.end_minute is None else _minutes_to_hhmm(o.end_minute)),
                 note=o.note,
             )
             for o in rows
@@ -323,9 +198,7 @@ class InterviewAvailabilityService:
                     start_minute=(
                         None if ov.start is None else _hhmm_to_minutes(ov.start)
                     ),
-                    end_minute=(
-                        None if ov.end is None else _hhmm_to_minutes(ov.end)
-                    ),
+                    end_minute=(None if ov.end is None else _hhmm_to_minutes(ov.end)),
                     note=ov.note,
                 )
             )
@@ -355,9 +228,7 @@ class InterviewAvailabilityService:
     async def get_overrides(self) -> list[DateOverrideOut]:
         return self._overrides_out(await self._overrides(None))
 
-    async def set_overrides(
-        self, payload: DateOverridesIn
-    ) -> list[DateOverrideOut]:
+    async def set_overrides(self, payload: DateOverridesIn) -> list[DateOverrideOut]:
         await self._replace_overrides(None, payload.overrides)
         await self.db.commit()
         return await self.get_overrides()
@@ -393,7 +264,7 @@ class InterviewAvailabilityService:
     async def _require_job_post(self, job_post_id: uuid.UUID) -> JobPost:
         job_post = await self.db.get(JobPost, job_post_id)
         if job_post is None:
-            raise NotFoundError(f"Job post '{job_post_id}' not found")
+            raise InterviewJobPostNotFoundError(f"Job post '{job_post_id}' not found")
         return job_post
 
     async def _interviewers(self, job_post_id: uuid.UUID) -> list[InterviewerOut]:
@@ -457,7 +328,7 @@ class InterviewAvailabilityService:
             )
             for user_id in dict.fromkeys(payload.interviewer_ids):
                 if user_id not in valid:
-                    raise ValidationError(f"User '{user_id}' does not exist")
+                    raise UnknownInterviewerError(f"User '{user_id}' does not exist")
                 self.db.add(
                     JobPostInterviewer(
                         id=uuid.uuid4(),
@@ -499,9 +370,11 @@ class InterviewAvailabilityService:
     ) -> list[OpenSlotOut]:
         application = await self.db.get(Application, application_id)
         if application is None:
-            raise NotFoundError(f"Application '{application_id}' not found")
+            raise InterviewApplicationNotFoundError(
+                f"Application '{application_id}' not found"
+            )
         if application.status != ApplicationStatus.INTERVIEW.value:
-            raise ConflictError(
+            raise ApplicationNotInInterviewError(
                 "Interview scheduling is only available while the application "
                 f"is in the interview stage (currently '{application.status}')"
             )
@@ -519,7 +392,7 @@ class InterviewAvailabilityService:
         step = duration or config.slot_minutes
         try:
             tz = ZoneInfo(config.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
+        except ZoneInfoNotFoundError, ValueError:
             tz = UTC
 
         rules = await self._resolved_windows(application.job_post_id)
@@ -533,9 +406,7 @@ class InterviewAvailabilityService:
         def windows_for(day: date) -> list[tuple[int, int]]:
             """(start_minute, end_minute) pairs bookable on this calendar date,
             after applying any date override."""
-            matched = [
-                o for o in overrides if o.start_date <= day <= o.end_date
-            ]
+            matched = [o for o in overrides if o.start_date <= day <= o.end_date]
             if any(o.is_unavailable for o in matched):
                 return []
             custom = [

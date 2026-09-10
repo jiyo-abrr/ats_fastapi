@@ -144,9 +144,11 @@ class ApplicationSummaryOut(BaseModel):
     created_at: datetime
     job_post_id: uuid.UUID
     job_title: str
-    # True while the application is in `interview`, HR has proposed times and
-    # the applicant has not picked one yet — drives the "pick a time" nudge.
-    needs_interview_pick: bool = False
+    # A domain-neutral "the applicant owes an action on this application" flag,
+    # filled by whichever domain owns the pending step via the list route's
+    # transformer (e.g. interviews sets "pick_interview_time"). None = nothing
+    # outstanding.
+    pending_applicant_action: str | None = None
 
 
 class AssessmentDeadlineExtensionOut(BaseModel):

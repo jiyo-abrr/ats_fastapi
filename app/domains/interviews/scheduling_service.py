@@ -9,120 +9,35 @@ already in `interview`.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.interview_availability import (
-    InterviewAvailabilityService,
+from app.domains.applications.models import Application
+from app.domains.auth.models import User
+from app.domains.interviews.availability_service import InterviewAvailabilityService
+from app.domains.interviews.exceptions import (
+    ApplicationNotInInterviewError,
+    InterviewApplicationNotFoundError,
+    InterviewRequestNotFoundError,
+    SlotNotOnRequestError,
+    SlotUnavailableError,
 )
-from app.domains.applications.models import (
-    Application,
+from app.domains.interviews.models import (
     InterviewRequest,
     InterviewSlot,
 )
-from app.domains.auth.models import User
+from app.domains.interviews.schemas import (
+    InterviewRequestIn,
+    InterviewRequestOut,
+    InterviewSlotOut,
+    InterviewStatusOut,
+    SelectSlotIn,
+    UpcomingInterviewOut,
+)
 from app.domains.job_posts.models import JobPost
-
-InterviewMode = Literal["video", "onsite", "phone"]
-
-
-class InterviewSlotIn(BaseModel):
-    starts_at: datetime
-
-
-class InterviewRequestIn(BaseModel):
-    mode: InterviewMode
-    location_or_link: str | None = None
-    duration_minutes: int = Field(default=45, ge=5, le=480)
-    notes: str | None = None
-    # Empty = the candidate self-books from interview availability; non-empty =
-    # HR hand-picked these specific times.
-    slots: list[InterviewSlotIn] = Field(default_factory=list, max_length=20)
-
-    @field_validator("location_or_link", "notes", mode="before")
-    @classmethod
-    def _blank_to_none(cls, v: object) -> object:
-        return None if isinstance(v, str) and not v.strip() else v
-
-    @field_validator("slots")
-    @classmethod
-    def _dedupe_and_check_future(
-        cls, slots: list[InterviewSlotIn]
-    ) -> list[InterviewSlotIn]:
-        seen: set[datetime] = set()
-        unique: list[InterviewSlotIn] = []
-        for slot in slots:
-            when = slot.starts_at
-            if when.tzinfo is None:
-                when = when.replace(tzinfo=UTC)
-            if when in seen:
-                continue
-            seen.add(when)
-            unique.append(InterviewSlotIn(starts_at=when))
-        if slots and not unique:
-            raise ValueError("At least one distinct time slot is required")
-        return sorted(unique, key=lambda s: s.starts_at)
-
-
-class SelectSlotIn(BaseModel):
-    """Confirm an interview time — either an existing hand-picked slot
-    (`slot_id`) or an open availability instant (`starts_at`)."""
-
-    slot_id: uuid.UUID | None = None
-    starts_at: datetime | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one(self) -> "SelectSlotIn":
-        if (self.slot_id is None) == (self.starts_at is None):
-            raise ValueError("Provide exactly one of slot_id or starts_at")
-        return self
-
-
-class InterviewSlotOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    starts_at: datetime
-    ends_at: datetime
-    selected: bool
-
-
-class InterviewRequestOut(BaseModel):
-    id: uuid.UUID
-    application_id: uuid.UUID
-    mode: str
-    location_or_link: str | None
-    duration_minutes: int
-    notes: str | None
-    self_scheduled: bool
-    created_at: datetime
-    slots: list[InterviewSlotOut]
-    selected_slot_id: uuid.UUID | None
-    selected_at: datetime | None
-
-
-class InterviewStatusOut(BaseModel):
-    """Per-application interview progress for the HR pipeline view."""
-
-    application_id: uuid.UUID
-    state: Literal["awaiting", "confirmed"]
-    starts_at: datetime | None = None
-
-
-class UpcomingInterviewOut(BaseModel):
-    application_id: uuid.UUID
-    applicant_name: str
-    job_title: str
-    mode: str
-    location_or_link: str | None
-    starts_at: datetime
-    ends_at: datetime
 
 
 class InterviewService:
@@ -134,9 +49,11 @@ class InterviewService:
     ) -> Application:
         application = await self.db.get(Application, application_id)
         if application is None:
-            raise NotFoundError(f"Application '{application_id}' not found")
+            raise InterviewApplicationNotFoundError(
+                f"Application '{application_id}' not found"
+            )
         if application.status != ApplicationStatus.INTERVIEW.value:
-            raise ConflictError(
+            raise ApplicationNotInInterviewError(
                 "Interview scheduling is only available while the application "
                 f"is in the interview stage (currently '{application.status}')"
             )
@@ -294,7 +211,7 @@ class InterviewService:
         await self._require_application_in_interview(application_id)
         loaded = await self._load(application_id)
         if loaded is None:
-            raise NotFoundError(
+            raise InterviewRequestNotFoundError(
                 "No interview has been scheduled for this application yet"
             )
         request, slots = loaded
@@ -303,11 +220,13 @@ class InterviewService:
         if payload.slot_id is not None:
             target = next((s for s in slots if s.id == payload.slot_id), None)
             if target is None:
-                raise ValidationError("That time slot is not part of this interview")
+                raise SlotNotOnRequestError(
+                    "That time slot is not part of this interview"
+                )
             if await self._overlaps_confirmed(
                 request.id, target.starts_at, request.duration_minutes
             ):
-                raise ConflictError(
+                raise SlotUnavailableError(
                     "That time overlaps another confirmed interview — pick another."
                 )
         else:
@@ -316,7 +235,9 @@ class InterviewService:
                 self.db
             ).open_slots_for_application(application_id)
             if not any(s.starts_at == payload.starts_at for s in open_slots):
-                raise ConflictError("That time is no longer available — pick another.")
+                raise SlotUnavailableError(
+                    "That time is no longer available — pick another."
+                )
             target = next((s for s in slots if s.starts_at == payload.starts_at), None)
             if target is None:
                 target = InterviewSlot(
@@ -333,7 +254,7 @@ class InterviewService:
         if target.selected_at is None and await self._overlaps_confirmed(
             request.id, target.starts_at, request.duration_minutes
         ):
-            raise ConflictError("That time was just taken — pick another.")
+            raise SlotUnavailableError("That time was just taken — pick another.")
 
         for slot in slots:
             slot.selected_at = now if slot is target else None
@@ -341,7 +262,9 @@ class InterviewService:
             await self.db.commit()
         except IntegrityError as exc:
             await self.db.rollback()
-            raise ConflictError("That time was just taken — pick another.") from exc
+            raise SlotUnavailableError(
+                "That time was just taken — pick another."
+            ) from exc
         return await self.get_for_application(application_id)  # type: ignore[return-value]
 
     async def pending_selection_application_ids(
@@ -406,9 +329,7 @@ class InterviewService:
         for application_id, starts_at, selected_at in rows:
             entry = by_app.setdefault(
                 application_id,
-                InterviewStatusOut(
-                    application_id=application_id, state="awaiting"
-                ),
+                InterviewStatusOut(application_id=application_id, state="awaiting"),
             )
             if selected_at is not None:
                 entry.state = "confirmed"

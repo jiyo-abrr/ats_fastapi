@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.domains.applications.interviews import InterviewRequestIn
+from app.domains.interviews.schemas import InterviewRequestIn
 
 
 def _payload(**over):

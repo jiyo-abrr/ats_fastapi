@@ -18,6 +18,8 @@ from app.domains.assessments.technical_assessment_templates import (
 )
 from app.domains.auth import models  # noqa: F401  (registers User with Base.metadata)
 from app.domains.company_addresses import models as company_address_models  # noqa: F401
+from app.domains.evaluations import models as evaluation_models  # noqa: F401
+from app.domains.interviews import models as interview_models  # noqa: F401
 from app.domains.job_posts import models as job_post_models  # noqa: F401
 from app.domains.positions import models as position_models  # noqa: F401
 from app.domains.rbac import models as rbac_models  # noqa: F401
@@ -79,9 +81,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

@@ -11,17 +11,22 @@ from app.domains.analytics.aggregation import (
     weighted_average,
 )
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.models import (
-    Application,
-    ApplicationEvaluation,
-    ApplicationEvaluationScore,
-)
+from app.domains.applications.models import Application
 from app.domains.assessments.attempts.enums import AttemptStatus, TemplateType
 from app.domains.assessments.attempts.models import (
     AssessmentAttempt,
     AssessmentAttemptReopen,
 )
 from app.domains.company_addresses.models import CompanyAddress
+
+# analytics is the one read-only cross-domain reporting layer: it queries other
+# domains' models directly (here, the evaluations domain) rather than going
+# through their repositories/services. It owns no write paths, so this stays
+# consistent with how it already reaches into job_posts / assessments / etc.
+from app.domains.evaluations.models import (
+    ApplicationEvaluation,
+    ApplicationEvaluationScore,
+)
 from app.domains.job_posts.models import JobPost
 from app.domains.positions.models import Position
 

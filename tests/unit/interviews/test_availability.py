@@ -1,9 +1,9 @@
+from datetime import date
+
 import pytest
 from pydantic import ValidationError
 
-from datetime import date
-
-from app.domains.applications.interview_availability import (
+from app.domains.interviews.schemas import (
     AvailabilityWindowIn,
     DateOverrideIn,
     DateOverridesIn,
@@ -107,6 +107,4 @@ def test_date_overrides_payload_validates_each_row():
 
 def test_override_range_must_not_invert():
     with pytest.raises(ValidationError):
-        DateOverrideIn(
-            start_date=date(2026, 12, 25), end_date=date(2026, 12, 20)
-        )
+        DateOverrideIn(start_date=date(2026, 12, 25), end_date=date(2026, 12, 20))

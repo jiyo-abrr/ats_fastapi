@@ -1,6 +1,6 @@
 """AI evaluation import + read side.
 
-HR exports the evaluation pack (see export.py), runs it through an external
+HR exports the evaluation pack (see pack.py), runs it through an external
 agent, then imports the agent's JSON here. Each import is stored as one
 `ApplicationEvaluation` (+ normalised per-dimension `ApplicationEvaluationScore`
 rows) so it can drive analytics later. The newest row per application is
@@ -11,124 +11,30 @@ import csv
 import io
 import uuid
 from collections import defaultdict
-from datetime import datetime
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ValidationError
-from app.domains.applications.models import (
-    Application,
+from app.domains.applications.models import Application
+from app.domains.auth.models import User
+from app.domains.evaluations.dimensions import (
+    ASSESSMENT_DIMENSIONS,
+    RESUME_DIMENSIONS,
+)
+from app.domains.evaluations.exceptions import (
+    EmptyEvaluationImportError,
+    EvaluationNotFoundError,
+)
+from app.domains.evaluations.models import (
     ApplicationEvaluation,
     ApplicationEvaluationScore,
 )
-from app.domains.auth.models import User
-
-# Canonical dimensions — the agent SHOULD use these, but unknown strings are
-# still stored (analytics groups on whatever is there). Kept here so the
-# export pack's schema file and this importer never drift.
-RESUME_DIMENSIONS = [
-    "relevant_work_experience",
-    "industry_experience",
-    "employment_gap",
-    "tenure_stability",
-    "career_progression",
-    "job_hopping_risk",
-    "educational_background",
-    "certifications_licenses",
-    "technical_skills_match",
-]
-ASSESSMENT_DIMENSIONS = ["pre_assessment", "culture_fit", "technical"]
-
-Rating = Literal["strong", "qualified", "below_bar", "na"]
-Recommendation = Literal["advance", "hold", "reject"]
-
-
-class EvaluationScoreIn(BaseModel):
-    dimension: str
-    rating: Rating
-    reason: str | None = None
-
-
-def _drop_blank_scores(value: object) -> object:
-    """Template stubs ship with rating="" — quietly drop unfilled rows rather
-    than 422 the whole import."""
-    if isinstance(value, list):
-        return [
-            v
-            for v in value
-            if not (isinstance(v, dict) and not str(v.get("rating") or "").strip())
-        ]
-    return value
-
-
-class ApplicationEvaluationIn(BaseModel):
-    application_id: uuid.UUID
-    seniority_assessed: str | None = None
-    fit_score: int | None = Field(default=None, ge=0, le=100)
-    recommendation: Recommendation | None = None
-    summary: str | None = None
-    resume_scores: list[EvaluationScoreIn] = Field(default_factory=list)
-    assessment_scores: list[EvaluationScoreIn] = Field(default_factory=list)
-
-    @field_validator("seniority_assessed", "summary", "recommendation", mode="before")
-    @classmethod
-    def _blank_to_none(cls, v: object) -> object:
-        return None if isinstance(v, str) and not v.strip() else v
-
-    @field_validator("resume_scores", "assessment_scores", mode="before")
-    @classmethod
-    def _prune_scores(cls, v: object) -> object:
-        return _drop_blank_scores(v)
-
-
-class EvaluationImportIn(BaseModel):
-    job_post_id: uuid.UUID
-    model: str | None = None
-    rubric_version: str | None = None
-    evaluations: list[ApplicationEvaluationIn]
-
-
-class EvaluationImportResultOut(BaseModel):
-    imported: int
-    skipped: list[str] = Field(default_factory=list)
-
-
-class EvaluationScoreOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    category: str
-    dimension: str
-    rating: str
-    reason: str | None
-
-
-class ApplicationEvaluationOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    application_id: uuid.UUID
-    recommendation: str | None
-    fit_score: int | None
-    seniority_assessed: str | None
-    summary: str | None
-    model: str | None
-    rubric_version: str | None
-    created_at: datetime
-    scores: list[EvaluationScoreOut] = Field(default_factory=list)
-
-
-class JobEvaluationRowOut(BaseModel):
-    """One applicant's latest AI evaluation, for the Compare tab's
-    side-by-side evaluation matrix."""
-
-    application_id: uuid.UUID
-    applicant_first_name: str
-    applicant_last_name: str
-    applicant_email: str
-    evaluation: ApplicationEvaluationOut | None = None
+from app.domains.evaluations.schemas import (
+    ApplicationEvaluationOut,
+    EvaluationImportIn,
+    EvaluationImportResultOut,
+    EvaluationScoreOut,
+)
 
 
 class EvaluationService:
@@ -139,7 +45,7 @@ class EvaluationService:
         self, payload: EvaluationImportIn, *, imported_by_user_id: uuid.UUID
     ) -> EvaluationImportResultOut:
         if not payload.evaluations:
-            raise ValidationError("No evaluations in payload")
+            raise EmptyEvaluationImportError("No evaluations in payload")
 
         # Only accept applications that actually belong to this job post.
         result = await self.db.execute(
@@ -212,7 +118,7 @@ class EvaluationService:
     ) -> ApplicationEvaluationOut:
         evaluation = await self._latest(application_id)
         if evaluation is None:
-            raise NotFoundError(
+            raise EvaluationNotFoundError(
                 f"No evaluation imported for application '{application_id}'"
             )
         scores = await self.db.execute(
