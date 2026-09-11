@@ -6,7 +6,11 @@ from getpass import getpass
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.core.security import hash_password
+from app.core.security import (
+    MAX_PASSWORD_BYTES,
+    hash_password,
+    password_exceeds_max_length,
+)
 from app.domains.auth import entities
 from app.domains.auth.repository import UserRepository
 from app.domains.rbac.repository import RoleRepository
@@ -31,6 +35,14 @@ async def main() -> None:
         or getpass(f"Admin password [{DEFAULT_ADMIN_PASSWORD}]: ")
         or DEFAULT_ADMIN_PASSWORD
     )
+    if password_exceeds_max_length(password):
+        print(
+            f"Password must be at most {MAX_PASSWORD_BYTES} bytes long "
+            "(shorter for passwords with non-ASCII characters) — bcrypt "
+            "can't hash anything longer.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     first_name = settings.admin_first_name
     last_name = settings.admin_last_name
     contact_number = settings.admin_contact_number

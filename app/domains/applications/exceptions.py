@@ -36,3 +36,8 @@ class InvalidAssessmentDeadlineExtensionError(ValidationError):
 
 class ResumeUnavailableError(NotFoundError):
     """The application's résumé object could not be retrieved from storage."""
+
+
+class ConcurrentApplicationUpdateError(ConflictError):
+    """Another request changed this application's status between the read and
+    the write. The caller should re-fetch and retry (review F02)."""

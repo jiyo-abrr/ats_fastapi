@@ -10,14 +10,10 @@ rows) so it can drive analytics later. The newest row per application is
 import csv
 import io
 import uuid
-from collections import defaultdict
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.csv_safe import csv_safe
-from app.domains.applications.models import Application
-from app.domains.auth.models import User
+from app.core.unit_of_work import UnitOfWork
+from app.domains.evaluations import entities
 from app.domains.evaluations.dimensions import (
     ASSESSMENT_DIMENSIONS,
     RESUME_DIMENSIONS,
@@ -26,21 +22,18 @@ from app.domains.evaluations.exceptions import (
     EmptyEvaluationImportError,
     EvaluationNotFoundError,
 )
-from app.domains.evaluations.models import (
-    ApplicationEvaluation,
-    ApplicationEvaluationScore,
-)
+from app.domains.evaluations.repository import EvaluationRepository
 from app.domains.evaluations.schemas import (
     ApplicationEvaluationOut,
     EvaluationImportIn,
     EvaluationImportResultOut,
-    EvaluationScoreOut,
 )
 
 
 class EvaluationService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
+    def __init__(self, evaluations: EvaluationRepository, uow: UnitOfWork):
+        self.evaluations = evaluations
+        self.uow = uow
 
     async def import_results(
         self, payload: EvaluationImportIn, *, imported_by_user_id: uuid.UUID
@@ -49,10 +42,7 @@ class EvaluationService:
             raise EmptyEvaluationImportError("No evaluations in payload")
 
         # Only accept applications that actually belong to this job post.
-        result = await self.db.execute(
-            select(Application.id).where(Application.job_post_id == payload.job_post_id)
-        )
-        valid_ids = {row[0] for row in result.all()}
+        valid_ids = await self.evaluations.valid_application_ids(payload.job_post_id)
 
         imported = 0
         skipped: list[str] = []
@@ -71,182 +61,72 @@ class EvaluationService:
                 skipped.append(str(item.application_id))
                 continue
 
-            evaluation = ApplicationEvaluation(
-                id=uuid.uuid4(),
-                application_id=item.application_id,
-                imported_by_user_id=imported_by_user_id,
-                recommendation=item.recommendation,
-                fit_score=item.fit_score,
-                seniority_assessed=item.seniority_assessed,
-                summary=item.summary,
-                model=payload.model,
-                rubric_version=payload.rubric_version,
+            evaluation_id = uuid.uuid4()
+            scores = [
+                entities.EvaluationScore(
+                    id=uuid.uuid4(),
+                    evaluation_id=evaluation_id,
+                    category=category,
+                    dimension=score.dimension,
+                    rating=score.rating,
+                    reason=score.reason,
+                )
+                for category, category_scores in (
+                    ("resume", item.resume_scores),
+                    ("assessment", item.assessment_scores),
+                )
+                for score in category_scores
+            ]
+            await self.evaluations.add(
+                entities.ApplicationEvaluation(
+                    id=evaluation_id,
+                    application_id=item.application_id,
+                    imported_by_user_id=imported_by_user_id,
+                    recommendation=item.recommendation,
+                    fit_score=item.fit_score,
+                    seniority_assessed=item.seniority_assessed,
+                    summary=item.summary,
+                    model=payload.model,
+                    rubric_version=payload.rubric_version,
+                    scores=scores,
+                )
             )
-            self.db.add(evaluation)
-            await self.db.flush()
-
-            for category, scores in (
-                ("resume", item.resume_scores),
-                ("assessment", item.assessment_scores),
-            ):
-                for score in scores:
-                    self.db.add(
-                        ApplicationEvaluationScore(
-                            id=uuid.uuid4(),
-                            evaluation_id=evaluation.id,
-                            category=category,
-                            dimension=score.dimension,
-                            rating=score.rating,
-                            reason=score.reason,
-                        )
-                    )
             imported += 1
 
-        await self.db.commit()
+        await self.uow.commit()
         return EvaluationImportResultOut(imported=imported, skipped=skipped)
-
-    async def _latest(self, application_id: uuid.UUID) -> ApplicationEvaluation | None:
-        result = await self.db.execute(
-            select(ApplicationEvaluation)
-            .where(ApplicationEvaluation.application_id == application_id)
-            .order_by(
-                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
-            )
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
 
     async def get_for_application(
         self, application_id: uuid.UUID
     ) -> ApplicationEvaluationOut:
-        evaluation = await self._latest(application_id)
+        evaluation = await self.evaluations.get_latest(application_id)
         if evaluation is None:
             raise EvaluationNotFoundError(
                 f"No evaluation imported for application '{application_id}'"
             )
-        scores = await self.db.execute(
-            select(ApplicationEvaluationScore).where(
-                ApplicationEvaluationScore.evaluation_id == evaluation.id
-            )
-        )
-        out = ApplicationEvaluationOut.model_validate(evaluation)
-        out.scores = [
-            EvaluationScoreOut.model_validate(s) for s in scores.scalars().all()
-        ]
-        return out
+        return ApplicationEvaluationOut.model_validate(evaluation)
 
     async def latest_full_for_applications(
         self, application_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, ApplicationEvaluationOut]:
-        """Newest evaluation + its per-dimension scores for each application,
-        batched (2 queries total)."""
-        if not application_ids:
-            return {}
-        eval_rows = await self.db.execute(
-            select(ApplicationEvaluation)
-            .where(ApplicationEvaluation.application_id.in_(application_ids))
-            .order_by(
-                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
-            )
-        )
-        latest: dict[uuid.UUID, ApplicationEvaluation] = {}
-        for row in eval_rows.scalars().all():
-            latest.setdefault(row.application_id, row)
-        if not latest:
-            return {}
-        score_rows = await self.db.execute(
-            select(ApplicationEvaluationScore).where(
-                ApplicationEvaluationScore.evaluation_id.in_(
-                    [e.id for e in latest.values()]
-                )
-            )
-        )
-        by_evaluation: dict[uuid.UUID, list[ApplicationEvaluationScore]] = defaultdict(
-            list
-        )
-        for score in score_rows.scalars().all():
-            by_evaluation[score.evaluation_id].append(score)
-
-        out: dict[uuid.UUID, ApplicationEvaluationOut] = {}
-        for app_id, evaluation in latest.items():
-            dto = ApplicationEvaluationOut.model_validate(evaluation)
-            dto.scores = [
-                EvaluationScoreOut.model_validate(s)
-                for s in by_evaluation.get(evaluation.id, [])
-            ]
-            out[app_id] = dto
-        return out
+        full = await self.evaluations.latest_full_for_applications(application_ids)
+        return {
+            app_id: ApplicationEvaluationOut.model_validate(evaluation)
+            for app_id, evaluation in full.items()
+        }
 
     async def latest_summaries_for_applications(
         self, application_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, dict]:
-        """`{application_id: {recommendation, fit_score}}` for the newest
-        evaluation of each — for the Compare scorecard column."""
-        if not application_ids:
-            return {}
-        result = await self.db.execute(
-            select(ApplicationEvaluation)
-            .where(ApplicationEvaluation.application_id.in_(application_ids))
-            .order_by(
-                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
-            )
-        )
-        out: dict[uuid.UUID, dict] = {}
-        for row in result.scalars().all():
-            if row.application_id in out:
-                continue  # first seen = newest (ordered desc)
-            out[row.application_id] = {
-                "recommendation": row.recommendation,
-                "fit_score": row.fit_score,
-            }
-        return out
+        return await self.evaluations.latest_summaries_for_applications(application_ids)
 
     async def evaluation_csv(self, job_post_id: uuid.UUID) -> str:
         """Flat CSV of the latest evaluation per applicant for one job post —
         one row per applicant, one column per dimension rating. For analytics /
         spreadsheets."""
-        app_rows = (
-            await self.db.execute(
-                select(
-                    Application.id,
-                    User.first_name,
-                    User.last_name,
-                    User.email,
-                    Application.status,
-                )
-                .join(User, User.id == Application.applicant_id)
-                .where(Application.job_post_id == job_post_id)
-                .order_by(User.first_name, User.last_name)
-            )
-        ).all()
+        app_rows = await self.evaluations.application_rows_for_job_post(job_post_id)
         app_ids = [r[0] for r in app_rows]
-
-        latest: dict[uuid.UUID, ApplicationEvaluation] = {}
-        if app_ids:
-            evals = await self.db.execute(
-                select(ApplicationEvaluation)
-                .where(ApplicationEvaluation.application_id.in_(app_ids))
-                .order_by(
-                    ApplicationEvaluation.created_at.desc(),
-                    ApplicationEvaluation.id.desc(),
-                )
-            )
-            for e in evals.scalars().all():
-                latest.setdefault(e.application_id, e)
-
-        scores_by_eval: dict[uuid.UUID, dict[tuple[str, str], tuple[str, str]]] = {}
-        if latest:
-            score_rows = await self.db.execute(
-                select(ApplicationEvaluationScore).where(
-                    ApplicationEvaluationScore.evaluation_id.in_(
-                        [e.id for e in latest.values()]
-                    )
-                )
-            )
-            for s in score_rows.scalars().all():
-                scores_by_eval.setdefault(s.evaluation_id, {})[
-                    (s.category, s.dimension)
-                ] = (s.rating, s.reason or "")
+        latest = await self.evaluations.latest_full_for_applications(app_ids)
 
         dimensions = [("resume", d) for d in RESUME_DIMENSIONS] + [
             ("assessment", d) for d in ASSESSMENT_DIMENSIONS
@@ -286,7 +166,10 @@ class EvaluationService:
             if evaluation is None:
                 _row(base + [""] * (len(header) - len(base)))
                 continue
-            smap = scores_by_eval.get(evaluation.id, {})
+            smap = {
+                (s.category, s.dimension): (s.rating, s.reason or "")
+                for s in evaluation.scores
+            }
             dimension_values: list[str] = []
             for key in dimensions:
                 rating, reason = smap.get(key, ("", ""))
@@ -299,7 +182,7 @@ class EvaluationService:
                     evaluation.seniority_assessed or "",
                     evaluation.model or "",
                     evaluation.rubric_version or "",
-                    evaluation.created_at.isoformat(),
+                    evaluation.created_at.isoformat() if evaluation.created_at else "",
                     *dimension_values,
                 ]
             )

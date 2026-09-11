@@ -16,6 +16,49 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
+class EvaluationExportJob(Base):
+    """A background evaluation-pack export (review F09/F26) — the pack is
+    built by an arq worker (`app/workers/evaluation_export.py`), not inline in
+    the request, so a job post with more applicants/résumés than
+    `EVALUATION_PACK_MAX`/`EVALUATION_PACK_MAX_BYTES` still gets an export,
+    just an asynchronous one. `result_object_key` points into the same MinIO
+    bucket resumes use, under the `evaluation_packs/` prefix."""
+
+    __tablename__ = "evaluation_export_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'failed')",
+            name="ck_evaluation_export_jobs_status",
+        ),
+        Index("ix_evaluation_export_jobs_job_post_id", "job_post_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_post_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("job_posts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    status_filter: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class ApplicationEvaluation(Base):
     """An external-AI evaluation of one application, imported after an offline
     (ChatGPT) scoring run. One row = one imported run; the newest per

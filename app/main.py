@@ -11,7 +11,9 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.database import async_engine, engine
 from app.core.exception_handlers import register_exception_handlers
+from app.core.job_queue import close_arq_pool
 from app.core.rate_limit import redis_client
+from app.core.request_id import request_id_middleware
 from app.core.scheduler import shutdown_scheduler, start_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +26,7 @@ async def lifespan(app: FastAPI):
     shutdown_scheduler()
     # Close the long-lived clients we opened at import (review F21).
     await redis_client.aclose()
+    await close_arq_pool()
     await async_engine.dispose()
     engine.dispose()
 
@@ -40,6 +43,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added after CORS so it's the outermost middleware — every request/response,
+# including ones that fail inside CORS handling, gets an ID.
+app.middleware("http")(request_id_middleware)
 
 register_exception_handlers(app)
 app.include_router(api_router)

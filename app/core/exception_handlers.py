@@ -35,10 +35,19 @@ def _make_domain_error_handler(status_code: int):
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None)
     logger.exception(
-        "Unhandled exception while handling %s %s", request.method, request.url.path
+        "Unhandled exception while handling %s %s [request_id=%s]",
+        request.method,
+        request.url.path,
+        request_id,
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    # Included in the body (not just the header) so it survives being copied
+    # out of a browser network tab into a support ticket.
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:

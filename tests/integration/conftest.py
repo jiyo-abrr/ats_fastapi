@@ -1,26 +1,14 @@
 """Integration test harness — a real, throwaway PostgreSQL database.
 
-Addresses maintainability review F06. The rest of the harness-gated findings
-(F02 races, F03 booking integrity, F04 template lifecycle, F08 query counts,
-F18 migrations) build on the fixtures here.
+Addresses maintainability review F06. The harness-gated findings (F02 races,
+F03 booking integrity, F04 template lifecycle, F08 query counts, F18
+migrations) build on the fixtures here.
 
-The suite is **skipped automatically** when no Postgres is reachable at
-`DATABASE_URL`, so `uv run pytest` on a laptop with nothing running still works
-for the unit tests. CI runs it with a `postgres` service.
-
-Fixtures:
-- `test_engine`      — async engine bound to a freshly-migrated `<db>_test`.
-- `db_session`       — a session inside a rolled-back outer transaction
-                       (`commit()` in the test becomes a savepoint release);
-                       use for single-connection service/repository tests.
-- `client`           — httpx AsyncClient against the app with `get_db`
-                       overridden onto `db_session`.
-- `committing_session` — factory for independent sessions that really commit,
-                       for two-connection race tests; all rows are truncated
-                       in teardown.
+The suite is **skipped automatically** when no Postgres is reachable, so
+`uv run pytest` on a laptop with nothing running still runs the unit tests.
+CI runs it with a `postgres` service.
 """
 
-import asyncio
 from collections.abc import AsyncIterator, Callable
 
 import psycopg
@@ -40,11 +28,7 @@ from app.core.config import settings
 _BASE_URL = settings.database_url  # postgresql+psycopg://user:pass@host:port/db
 _TEST_DB = _BASE_URL.rsplit("/", 1)[-1] + "_test"
 _TEST_URL = _BASE_URL.rsplit("/", 1)[0] + "/" + _TEST_DB
-# psycopg (sync) DSN to the maintenance db for CREATE/DROP DATABASE.
-_ADMIN_DSN = (
-    _BASE_URL.replace("postgresql+psycopg://", "postgresql://").rsplit("/", 1)[0]
-    + "/postgres"
-)
+_ADMIN_DSN = _BASE_URL.replace("+psycopg", "").rsplit("/", 1)[0] + "/postgres"
 
 
 def _postgres_reachable() -> bool:
@@ -57,35 +41,25 @@ def _postgres_reachable() -> bool:
 
 _SKIP = pytest.mark.skipif(
     not _postgres_reachable(),
-    reason="no PostgreSQL reachable at DATABASE_URL — integration tests skipped",
+    reason="no PostgreSQL reachable — integration tests skipped",
 )
 
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        if "tests/integration/" in str(item.fspath).replace("\\", "/"):
+        if "/tests/integration/" in str(item.fspath).replace("\\", "/"):
             item.add_marker(_SKIP)
 
 
 @pytest.fixture(scope="session")
 def _fresh_test_database() -> None:
     with psycopg.connect(_ADMIN_DSN, autocommit=True) as conn:
-        conn.execute(
-            text(  # noqa: S608 - identifier is a constant
-                f'DROP DATABASE IF EXISTS "{_TEST_DB}" WITH (FORCE)'
-            ).text
-        )
-        conn.execute(text(f'CREATE DATABASE "{_TEST_DB}"').text)
+        conn.execute(f'DROP DATABASE IF EXISTS "{_TEST_DB}" WITH (FORCE)')
+        conn.execute(f'CREATE DATABASE "{_TEST_DB}"')
 
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", _TEST_URL)
     command.upgrade(cfg, "head")
-
-
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    # psycopg's async driver needs a selector loop (see CLAUDE.md).
-    return asyncio.get_event_loop_policy()
 
 
 @pytest.fixture(scope="session")
@@ -97,6 +71,8 @@ async def test_engine(_fresh_test_database) -> AsyncIterator:
 
 @pytest.fixture
 async def db_session(test_engine) -> AsyncIterator[AsyncSession]:
+    """A session inside a rolled-back outer transaction — `commit()` in the
+    test becomes a savepoint release, so nothing persists across tests."""
     async with test_engine.connect() as conn:
         outer = await conn.begin()
         session = AsyncSession(
@@ -129,7 +105,13 @@ async def client(db_session) -> AsyncIterator[AsyncClient]:
         app.dependency_overrides.pop(get_db, None)
 
 
-_ALL_TABLES = None
+_ALL_TABLES: list[str] | None = None
+
+
+# Seeded by migrations and relied on by every test — never truncate these.
+_KEEP_TABLES = frozenset(
+    {"alembic_version", "roles", "permissions", "role_permissions"}
+)
 
 
 async def _truncate_all(engine) -> None:
@@ -137,12 +119,9 @@ async def _truncate_all(engine) -> None:
     async with engine.begin() as conn:
         if _ALL_TABLES is None:
             rows = await conn.execute(
-                text(
-                    "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
-                )
+                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             )
-            _ALL_TABLES = [r[0] for r in rows]
+            _ALL_TABLES = [r[0] for r in rows if r[0] not in _KEEP_TABLES]
         if _ALL_TABLES:
             await conn.execute(
                 text(
@@ -157,7 +136,7 @@ async def _truncate_all(engine) -> None:
 async def committing_session(
     test_engine,
 ) -> AsyncIterator[Callable[[], AsyncSession]]:
-    """Hand out real, independently-committing sessions for race tests. Every
+    """Independently-committing sessions for two-connection race tests. Every
     table is truncated afterwards."""
     maker = async_sessionmaker(bind=test_engine, expire_on_commit=False)
     opened: list[AsyncSession] = []

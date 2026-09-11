@@ -55,10 +55,9 @@ construction only*:
 
 ## Known gaps (tracked, not yet conforming)
 
-- **`interviews/` and `evaluations/` write paths** still take `AsyncSession`
-  and query/commit directly — they have no `repository.py`/`entities.py` yet
-  (Phase 2/3 of the extraction, gated on the integration harness). New work in
-  those domains should move toward the write path above, not extend the
-  session-in-service style.
-- **No integration or real-app API tests.** See
-  [maintainability-review.md](maintainability-review.md) F06.
+`interviews/` and `evaluations/` were brought onto the write path above in
+review F07 — both now have `entities.py`/`repository.py` (`interviews/` has
+two repositories, mirroring its two services) and their services take a
+repository + `UnitOfWork`, never a raw `AsyncSession`. Nothing is currently
+tracked as not-yet-conforming; the integration harness (F06) that gated this
+work is also done — see `tests/integration/`.

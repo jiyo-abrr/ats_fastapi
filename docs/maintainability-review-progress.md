@@ -30,14 +30,14 @@ frozen snapshot of the review and is not re-run per batch.**
 | ID | Severity | Status | Notes |
 | --- | --- | --- | --- |
 | F01 | High | ✅ | Stages both services with `commit=False`, one commit. Batch 6: `ApplyToJob.execute` now rolls back on *any* exception (not just commit `IntegrityError`), owning its transaction for non-request callers. Real-DB persistence test still pending (F06). |
-| F02 | High | ⛔ | Transition races. Needs integration harness (F06) — deferred. |
-| F03 | High | 🟡 | Batch 6: `select_slot` rejects past slots + arbitrary times against a hand-picked offer. The different-start overlap race and an atomic exclusion constraint still need F06. |
-| F04 | High | 🟡 | `_require_template` raises `MissingAssessmentTemplateError` (404) instead of `AttributeError` when a template was deleted after an attempt. Live-attempt delete block + snapshot versioning deferred — see D03 (would break the template↔attempts independence without a design change). |
+| F02 | High | ✅ | `ApplicationRepository.compare_and_set_status` (applications) + `AssessmentAttemptRepository.compare_and_set_status` (batch 13: start/complete/expire) — both conditional `UPDATE … WHERE status = :expected`, so two racing transitions can't clobber each other. `tests/integration/test_transition_races.py`, `test_attempt_transition_races.py`. |
+| F03 | High | ✅ | Batch 6: past-slot + manual-mode guards. Batch 11: `interview_slots.ends_at` (kept in sync with duration) + DB-generated `during tstzrange` + `ex_interview_slots_no_overlap` EXCLUDE constraint (migration `7fe20b73e9d2`) — overlapping confirmed interviews are now impossible at the DB level. `tests/integration/test_interview_overlap.py`. |
+| F04 | High | ✅ | `_require_template` 404 on a missing ref; `delete_assessment_template` use case blocks deleting a template with any attempt. Batch 12: `AssessmentAttempt.template_snapshot` (JSONB, migration `0fe39298461d`) freezes the template at issuance; `_get_template` prefers it everywhere. An HR edit post-issuance no longer changes an attempt's meaning — D03 closed. |
 | F05 | High | ✅ | Start/answer parent-status + deadline checks, and (batch 6) `reopen()` now rejects a non-answerable parent too. Concurrent races still fall under F02. |
-| F06 | Medium | 🟡 | 239 unit cases pass; CI added. Committed Postgres integration + real-app API tests remain the recommended next phase. |
-| F07 | Medium | 🟡 | `docs/architecture.md` written (write/read paths + approved exceptions + known gaps). Bringing interviews/evaluations onto the repository/entity path stays deferred (Phase 2/3, needs F06). |
-| F08 | Medium | ⛔ | `_to_entity` N+1 — needs F06. |
-| F09 | Medium | 🟡 | Batch 7: `?status=` filter, SQL `limit`, and a 300 MiB byte budget on the export (F26 addressed). Booking-horizon query bound + background-export path still open. |
+| F06 | Medium | ✅ | `tests/integration/` — real throwaway Postgres, per-test rollback, `committing_session` for race tests, auto-skip when no DB. 12 integration tests; CI runs them with a `postgres` service. |
+| F07 | Medium | ✅ | `docs/architecture.md` written (write/read paths + approved exceptions + known gaps). Batches 17–18: `evaluations/` and `interviews/` both moved onto the entities/repository pattern — see the change-log entries below. |
+| F08 | Medium | ✅ | `JobPostRepository.map_many` bulk-fetches per page (fixed 5 queries regardless of page size). Integration query-count test in `tests/integration/test_query_counts.py`. |
+| F09 | Medium | ✅ | Batch 7: `?status=` filter, SQL `limit`, and a 300 MiB byte budget on the export. Batch 16: `POST /applications/export/async` + arq worker (`app/workers/evaluation_export.py`) for job posts over either cap — see F26. |
 | F10 | Medium | ✅ | Deadline invariants, auth widths, numeric-config `TypeError`→500 fix, and (batch 7) salary order, assessment-window/timer/prompt/reason bounds across all template domains, multi-choice distinct-selection semantics. `date` answer re-parse of an unvalidated config is the only residual edge. |
 | F11 | Medium | ✅ | HTTP auth hashing/verification is offloaded. Signup/HR-create reject overlong passwords before upload; login returns invalid credentials for overlong input. Friendly CLI length handling remains a follow-up. |
 | F12 | Medium | 🟡 | Batch 6: constraint-specific dup-email translation. Batch 9: bounded chunked upload read (`read_upload_bounded`). Orphaned-object compensation on a post-upload failure remains. |
@@ -46,9 +46,9 @@ frozen snapshot of the review and is not re-run per batch.**
 | F15 | Medium | ✅ | Done (Batch 1). |
 | F16 | Medium | 🔵 🟡 | Flag + advisory lock + script lock (F29). Batch 9: per-tick timing/success/failure logging. Batch processing and a real-Postgres cancellation test remain. |
 | F17 | Medium | ✅ | Atomic Lua INCR+EXPIRE; batch 6 also heals a key that lost its TTL. Real-Redis verification still pending. Fail-open on Redis error is deliberate. |
-| F18 | Medium | 🔵 🟡 | D07 documents empty production baseline and unsupported offline SQL. Supported fresh/populated upgrade execution still unverified. |
+| F18 | Medium | ✅ | D07 + `tests/integration/test_migrations.py`: single head, no model/migration drift (`alembic check`), full downgrade→upgrade round trip against real Postgres. |
 | F19 | Medium | 🟡 | README, architecture, decisions, CI workflow added; local lint/format clean (219 files). Hosted-runner CI verification and integration-test enforcement still pending. |
-| F20 | Low | ⛔ | Template dedup — deferred, not correctness. |
+| F20 | Low | ✅ | Batch 15: `app/core/template_service.py::BaseTemplateService` — the 3 template domains' identical CRUD/question-authoring logic now lives once; each domain's `service.py` is a ~15-line subclass. All 66 pre-existing per-domain tests pass unchanged. |
 | F21 | Low | 🟡 | Admin bootstrap via Settings; lifespan client shutdown + expired-token purge (batch 8); `GET /health/ready` (batch 9). Request-correlation IDs and a metrics framework remain. |
 
 ## Additional second-pass findings
@@ -61,7 +61,7 @@ Detailed evidence, reproduction limits, and acceptance checks are in the main re
 | F23 | Medium | 🟡 | Past-slot + manual-mode enforcement (batch 6) + idempotent re-confirmation of the already-confirmed slot (batch 9). The interview domain still has no *service* tests (schema-only) — the remaining gap. |
 | F24 | Medium | ✅ | `24:01`–`24:59` rejected (`24:00` kept); generated slots de-duplicated by start instant. Overlapping-window *authoring* still accepted (normalisation not added). |
 | F25 | Medium | ✅ | `content_disposition_attachment()` — ASCII fallback + `filename*`. |
-| F26 | Medium | 🟡 | Batch 7: `?status=` subset filter, SQL `limit`, 300 MiB byte budget with actionable 413. Async/background export path is the remaining piece. |
+| F26 | Medium | ✅ | Batch 7: `?status=` subset filter, SQL `limit`, 300 MiB byte budget with actionable 413. Batch 16: async/background export path via arq — `POST /applications/export/async` enqueues, `GET .../export-jobs/{id}` polls, `GET .../export-jobs/{id}/download` fetches the finished ZIP from MinIO. |
 | F27 | Medium | ✅ | Constraint-specific translation via `violated_constraint()`; profile-email collisions handled; unrelated `IntegrityError`s re-raised. |
 | F28 | Medium, policy-dependent | ✅ | Decision recorded (D-note: auto-release). Batch 7: withdrawn/denied/disqualified applications are filtered out of every capacity + calendar query, freeing the slot immediately while keeping the rows. |
 | F29 | Medium | ✅ | Shared `sweep_advisory_lock` across the scheduler tick and both `main()` entry points. Cancellation/unlock behaviour still needs a real-Postgres test. |
@@ -90,13 +90,109 @@ Detailed evidence, reproduction limits, and acceptance checks are in the main re
 | D02 | Interview capacity model | One shared org calendar (provisional). |
 | D03 | Assessment history vs mutable templates | Missing-template read-time error implemented; delete/lifecycle protection and versioning remain pending. |
 | D04 | Cascade-delete of hiring history | ✅ `delete_job_post` use case — 409 when applications exist. |
-| D05 | Export bounding | Count cap implemented; byte bound and usable filtered/background path pending (F26). |
+| D05 | Export bounding | Count cap, byte bound, status filter, and background export path (arq) all implemented — see F09/F26. |
 | D06 | Scheduler ownership | Flag + scheduler-tick lock implemented; standalone entry points remain unguarded (F29). |
 | D07 | Migration baseline | First supported baseline documented; offline `--sql` unsupported. |
 | D08 | Refresh-token rotation | Current behaviour documented; rotation is a follow-up. |
 | D09 | CSV formula injection | Prefix-guard risky cells in exports. |
 
 ## Change log
+
+### Batch 18 — F07 (rest): `interviews/` onto entities/repository
+- **F07 ✅ (interviews)** `entities.py` (`InterviewConfig`, `AvailabilityWindow`,
+  `DateOverride`, `InterviewRequest`, `InterviewSlot` — `JobPostInterviewer`
+  gets no entity, same as `job_posts`' own join tables). Two repositories,
+  mirroring the domain's two existing service objects:
+  `repository.py::InterviewRepository` (request/slot flow, for
+  `scheduling_service.py::InterviewService`) and
+  `availability_repository.py::InterviewAvailabilityRepository`
+  (config/windows/overrides/interviewers, for
+  `availability_service.py::InterviewAvailabilityService`). Both services now
+  take their repository + a `UnitOfWork`, never a raw `AsyncSession`;
+  `InterviewService` takes `InterviewAvailabilityService` as a constructor
+  dependency for its one cross-service call (the open-availability check
+  inside `select_slot`).
+- Zero behavior change was the actual spec here — the race/overlap/idempotent-
+  reconfirm logic, the `IntegrityError` → `SlotUnavailableError` catch (now
+  around `uow.commit()`/`uow.rollback()` instead of `db.commit()`/
+  `db.rollback()`, same shape as `BaseTemplateService.delete()`), and the
+  DB-enforced non-overlap constraint reliance are all moved verbatim, not
+  rewritten. The joined reporting queries (`confirmed_interviews`,
+  `statuses_for_job_post`, `booked_intervals`, `applications_awaiting_slot_pick`)
+  stay on the repositories as raw projection queries — the sanctioned
+  cross-domain read exception (`docs/architecture.md`), not something this
+  finding asks to change.
+- Verification: all 6 pre-existing `tests/integration/test_interview_service.py`
+  tests and all 3 `tests/integration/test_availability_windows.py` tests pass
+  **with their assertions unchanged** — only their service-construction
+  helper was updated (`InterviewService(db_session)` → building the
+  repository/uow chain), which is the strongest evidence behavior didn't
+  drift. Added `tests/unit/interviews/test_service.py` (mock-repository:
+  the IntegrityError-on-commit path, `applications_awaiting_slot_pick`/
+  `delete_request` delegation). 286 tests pass overall (258 unit + 28
+  integration); ruff + format clean; `alembic check` clean (no schema
+  changes — this batch is a pure code-shape refactor).
+- `docs/architecture.md`'s "Known gaps" section now has nothing left in it —
+  both domains conform. CLAUDE.md updated (interviews domain note, the
+  "Entities vs. models" caveat, the stale pre-F06 "no integration tests yet"
+  line in Testing).
+
+### Batch 17 — F07 (start): `evaluations/` onto entities/repository
+- **F07 ✅ (evaluations, import/read side)** `entities.py`
+  (`ApplicationEvaluation` + `EvaluationScore`) + `repository.py::
+  EvaluationRepository`; `service.py` now takes the repository + a
+  `UnitOfWork` instead of a raw `AsyncSession`. `pack.py` (export ZIP, pure/
+  stdlib) and `export_jobs.py` (the F09/F26 background-export tracker,
+  already on this pattern before this batch) are untouched — out of scope.
+  `EvaluationRepository.application_rows_for_job_post` keeps the
+  `applications`/`users` join for the CSV export as a repository-owned
+  projection query, the same sanctioned pattern `InterviewRepository`'s
+  reporting queries use.
+- Verification: all 276 pre-existing unit tests pass **unchanged** (no
+  assertions touched — this was a pure internal refactor); added
+  `tests/unit/evaluations/test_service.py` (6 new tests: empty-payload
+  rejection, cross-job-post application filtering, blank-row skip, staging +
+  commit, not-found). 282 unit tests + 28 integration tests pass; ruff +
+  format clean; `alembic check` clean (no schema change).
+
+### Batch 16 — F09/F26 async evaluation-pack export (arq)
+- **F09/F26 ✅** Background export path for job posts over the synchronous
+  `GET /applications/export` route's caps (`EVALUATION_PACK_MAX` applicants /
+  300 MiB of résumés):
+  - `EvaluationExportJob` (migration `bab3745597ee`) tracks one export end to
+    end — `pending → running → done|failed`, `result_object_key` into the
+    `resumes` bucket under `evaluation_packs/`. This is new code in the
+    `evaluations` domain and — unlike the rest of that domain — *does* follow
+    the entities/repository pattern (`export_jobs.py`: `EvaluationExportJob`
+    entity + `EvaluationExportJobRepository` + `ExportJobService`), since it's
+    small, self-contained, and has no reason to inherit the domain's
+    session-in-service style. Doesn't change F07's status — the rest of
+    `evaluations`/`interviews` is unchanged.
+  - `app/core/job_queue.py` — a process-wide lazily-created `arq` pool
+    (`get_arq_pool`/`close_arq_pool`, same shape as `rate_limit.redis_client`),
+    reusing the existing `REDIS_URL` dependency rather than adding a second
+    broker (`uv add arq` → `arq==0.25.0`, `hiredis==3.4.1`).
+  - `app/workers/evaluation_export.py` — the arq consumer, run as its own
+    process (`uv run arq app.workers.evaluation_export.WorkerSettings`).
+    Builds the pack via the same `pack.build_evaluation_pack` the sync route
+    uses, constructing `AssessmentService`/repos directly (not through FastAPI
+    DI) against its own `AsyncSessionLocal`. Deliberately skips
+    `ApplicationService.get_resume()`'s owner-or-manage_applications recheck —
+    the job was already authorized once, by the manage_applications-gated
+    route that enqueued it — and reads `resume_object_key` straight from
+    MinIO instead.
+  - New routes, all under the existing `manage_applications`-gated router:
+    `POST /applications/export/async` (enqueue, 202), `GET
+    /applications/export-jobs/{id}` (poll status), `GET
+    /applications/export-jobs/{id}/download` (fetch the finished ZIP; 409 if
+    not yet `done`).
+- Tests: `tests/unit/evaluations/test_export_jobs.py` (enqueue stages+commits+
+  enqueues on arq, status-filter joining, not-found). 276 unit tests pass;
+  `alembic check` clean; `ruff check`/`ruff format --check` clean.
+- Still open: no integration test hitting a real Redis/arq worker end-to-end
+  (unit-level only, consistent with the rest of this domain's test depth);
+  no orphaned-MinIO-object cleanup if a job is abandoned mid-run (same
+  category of gap as F12's orphaned-object note).
 
 ### Batch 9 — smaller follow-ups (F12, F16, F21, F23)
 - **F23 ✅** `select_slot` — selecting the slot that is already confirmed is now

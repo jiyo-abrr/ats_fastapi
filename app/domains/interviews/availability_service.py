@@ -12,31 +12,23 @@ ahead, minimum notice, and the timezone the wall-clock window times are in.
 instants, dropping ones that are too soon or already booked by anyone.
 """
 
+import itertools
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.models import Application
-from app.domains.auth.models import User
-from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
+from app.domains.interviews import entities
+from app.domains.interviews.availability_repository import (
+    InterviewAvailabilityRepository,
+)
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
     InterviewApplicationNotFoundError,
     InterviewJobPostNotFoundError,
     InvalidAvailabilityWindowError,
     UnknownInterviewerError,
-)
-from app.domains.interviews.models import (
-    InterviewAvailabilityRule,
-    InterviewConfig,
-    InterviewDateOverride,
-    InterviewRequest,
-    InterviewSlot,
-    JobPostInterviewer,
 )
 from app.domains.interviews.schemas import (
     _WEEKDAYS,
@@ -55,28 +47,17 @@ from app.domains.interviews.schemas import (
     _hhmm_to_minutes,
     _minutes_to_hhmm,
 )
-from app.domains.job_posts.models import JobPost
-from app.domains.rbac.models import Role
-
-_CONFIG_ID = 1
 
 
 class InterviewAvailabilityService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
+    def __init__(self, availability: InterviewAvailabilityRepository, uow: UnitOfWork):
+        self.availability = availability
+        self.uow = uow
 
     # -- config ------------------------------------------------------------
 
-    async def _get_or_make_config(self) -> InterviewConfig:
-        config = await self.db.get(InterviewConfig, _CONFIG_ID)
-        if config is None:
-            config = InterviewConfig(id=_CONFIG_ID)
-            self.db.add(config)
-            await self.db.flush()
-        return config
-
     @staticmethod
-    def _config_out(config: InterviewConfig) -> InterviewConfigOut:
+    def _config_out(config: entities.InterviewConfig) -> InterviewConfigOut:
         return InterviewConfigOut(
             slot_minutes=config.slot_minutes,
             horizon_days=config.horizon_days,
@@ -86,23 +67,9 @@ class InterviewAvailabilityService:
 
     # -- window rows -----------------------------------------------------
 
-    async def _windows(
-        self, job_post_id: uuid.UUID | None
-    ) -> list[InterviewAvailabilityRule]:
-        stmt = select(InterviewAvailabilityRule).order_by(
-            InterviewAvailabilityRule.weekday,
-            InterviewAvailabilityRule.start_minute,
-        )
-        stmt = (
-            stmt.where(InterviewAvailabilityRule.job_post_id.is_(None))
-            if job_post_id is None
-            else stmt.where(InterviewAvailabilityRule.job_post_id == job_post_id)
-        )
-        return list((await self.db.execute(stmt)).scalars().all())
-
     @staticmethod
     def _windows_out(
-        rules: list[InterviewAvailabilityRule],
+        rules: list[entities.AvailabilityWindow],
     ) -> list[AvailabilityWindowOut]:
         return [
             AvailabilityWindowOut(
@@ -118,12 +85,11 @@ class InterviewAvailabilityService:
         job_post_id: uuid.UUID | None,
         windows: list[AvailabilityWindowIn],
     ) -> None:
-        clause = (
-            InterviewAvailabilityRule.job_post_id.is_(None)
-            if job_post_id is None
-            else InterviewAvailabilityRule.job_post_id == job_post_id
-        )
-        await self.db.execute(delete(InterviewAvailabilityRule).where(clause))
+        # Reject overlapping windows on the same weekday up front — slot
+        # generation would otherwise silently emit duplicate/redundant
+        # instants for the overlap (review F24). Two windows that merely touch
+        # (one ends exactly when the other starts) are fine.
+        by_weekday: dict[int, list[tuple[int, int]]] = {}
         for window in windows:
             start = _hhmm_to_minutes(window.start)
             end = _hhmm_to_minutes(window.end)
@@ -131,36 +97,33 @@ class InterviewAvailabilityService:
                 raise InvalidAvailabilityWindowError(
                     f"{_WEEKDAYS[window.weekday]} window end must be after its start"
                 )
-            self.db.add(
-                InterviewAvailabilityRule(
-                    id=uuid.uuid4(),
-                    job_post_id=job_post_id,
-                    weekday=window.weekday,
-                    start_minute=start,
-                    end_minute=end,
-                )
+            by_weekday.setdefault(window.weekday, []).append((start, end))
+        for weekday, spans in by_weekday.items():
+            for (s1, e1), (s2, e2) in itertools.combinations(sorted(spans), 2):
+                if s2 < e1:
+                    raise InvalidAvailabilityWindowError(
+                        f"{_WEEKDAYS[weekday]} has overlapping windows "
+                        f"({_minutes_to_hhmm(s1)}-{_minutes_to_hhmm(e1)} and "
+                        f"{_minutes_to_hhmm(s2)}-{_minutes_to_hhmm(e2)})"
+                    )
+
+        entities_list = [
+            entities.AvailabilityWindow(
+                id=uuid.uuid4(),
+                job_post_id=job_post_id,
+                weekday=window.weekday,
+                start_minute=_hhmm_to_minutes(window.start),
+                end_minute=_hhmm_to_minutes(window.end),
             )
+            for window in windows
+        ]
+        await self.availability.replace_windows(job_post_id, entities_list)
 
     # -- date overrides ------------------------------------------------
 
-    async def _overrides(
-        self, job_post_id: uuid.UUID | None
-    ) -> list[InterviewDateOverride]:
-        clause = (
-            InterviewDateOverride.job_post_id.is_(None)
-            if job_post_id is None
-            else InterviewDateOverride.job_post_id == job_post_id
-        )
-        stmt = (
-            select(InterviewDateOverride)
-            .where(clause)
-            .order_by(InterviewDateOverride.start_date)
-        )
-        return list((await self.db.execute(stmt)).scalars().all())
-
     @staticmethod
     def _overrides_out(
-        rows: list[InterviewDateOverride],
+        rows: list[entities.DateOverride],
     ) -> list[DateOverrideOut]:
         return [
             DateOverrideOut(
@@ -182,56 +145,50 @@ class InterviewAvailabilityService:
         job_post_id: uuid.UUID | None,
         overrides: list[DateOverrideIn],
     ) -> None:
-        clause = (
-            InterviewDateOverride.job_post_id.is_(None)
-            if job_post_id is None
-            else InterviewDateOverride.job_post_id == job_post_id
-        )
-        await self.db.execute(delete(InterviewDateOverride).where(clause))
-        for ov in overrides:
-            self.db.add(
-                InterviewDateOverride(
-                    id=uuid.uuid4(),
-                    job_post_id=job_post_id,
-                    start_date=ov.start_date,
-                    end_date=ov.end_date,
-                    is_unavailable=ov.is_unavailable,
-                    start_minute=(
-                        None if ov.start is None else _hhmm_to_minutes(ov.start)
-                    ),
-                    end_minute=(None if ov.end is None else _hhmm_to_minutes(ov.end)),
-                    note=ov.note,
-                )
+        entities_list = [
+            entities.DateOverride(
+                id=uuid.uuid4(),
+                job_post_id=job_post_id,
+                start_date=ov.start_date,
+                end_date=ov.end_date,
+                is_unavailable=ov.is_unavailable,
+                start_minute=(None if ov.start is None else _hhmm_to_minutes(ov.start)),
+                end_minute=(None if ov.end is None else _hhmm_to_minutes(ov.end)),
+                note=ov.note,
             )
+            for ov in overrides
+        ]
+        await self.availability.replace_overrides(job_post_id, entities_list)
 
     # -- global --------------------------------------------------------
 
     async def get_global(self) -> GlobalAvailabilityOut:
-        config = await self._get_or_make_config()
+        config = await self.availability.get_or_create_config()
         return GlobalAvailabilityOut(
             config=self._config_out(config),
-            windows=self._windows_out(await self._windows(None)),
-            overrides=self._overrides_out(await self._overrides(None)),
+            windows=self._windows_out(await self.availability.windows(None)),
+            overrides=self._overrides_out(await self.availability.overrides(None)),
         )
 
     async def set_global(self, payload: GlobalAvailabilityIn) -> GlobalAvailabilityOut:
-        config = await self._get_or_make_config()
+        config = await self.availability.get_or_create_config()
         config.slot_minutes = payload.config.slot_minutes
         config.horizon_days = payload.config.horizon_days
         config.min_notice_hours = payload.config.min_notice_hours
         config.timezone = payload.config.timezone
+        await self.availability.save_config(config)
         await self._replace_windows(None, payload.windows)
-        await self.db.commit()
+        await self.uow.commit()
         return await self.get_global()
 
     # -- global date overrides (dedicated page) -----------------------
 
     async def get_overrides(self) -> list[DateOverrideOut]:
-        return self._overrides_out(await self._overrides(None))
+        return self._overrides_out(await self.availability.overrides(None))
 
     async def set_overrides(self, payload: DateOverridesIn) -> list[DateOverrideOut]:
         await self._replace_overrides(None, payload.overrides)
-        await self.db.commit()
+        await self.uow.commit()
         return await self.get_overrides()
 
     # -- per job post -------------------------------------------------
@@ -240,65 +197,34 @@ class InterviewAvailabilityService:
         """Every admin / HR account — the pool for a job post's interviewer
         list. Accessible to any `manage_applications` user (unlike the
         admin-only `/auth/users` list)."""
-        rows = (
-            (
-                await self.db.execute(
-                    select(User)
-                    .join(Role, Role.id == User.role_id)
-                    .where(Role.name.in_(["admin", "hr"]), User.is_active)
-                    .order_by(User.first_name, User.last_name)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        rows = await self.availability.list_staff()
         return [
             InterviewerOut(
-                id=u.id,
-                first_name=u.first_name,
-                last_name=u.last_name,
-                email=u.email,
+                id=u.id, first_name=u.first_name, last_name=u.last_name, email=u.email
             )
             for u in rows
         ]
 
-    async def _require_job_post(self, job_post_id: uuid.UUID) -> JobPost:
-        job_post = await self.db.get(JobPost, job_post_id)
+    async def _require_job_post(self, job_post_id: uuid.UUID):
+        job_post = await self.availability.get_job_post(job_post_id)
         if job_post is None:
             raise InterviewJobPostNotFoundError(f"Job post '{job_post_id}' not found")
         return job_post
 
     async def _interviewers(self, job_post_id: uuid.UUID) -> list[InterviewerOut]:
-        rows = (
-            (
-                await self.db.execute(
-                    select(User)
-                    .join(
-                        JobPostInterviewer,
-                        JobPostInterviewer.user_id == User.id,
-                    )
-                    .where(JobPostInterviewer.job_post_id == job_post_id)
-                    .order_by(User.first_name, User.last_name)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        rows = await self.availability.interviewers(job_post_id)
         return [
             InterviewerOut(
-                id=u.id,
-                first_name=u.first_name,
-                last_name=u.last_name,
-                email=u.email,
+                id=u.id, first_name=u.first_name, last_name=u.last_name, email=u.email
             )
             for u in rows
         ]
 
     async def get_for_job_post(self, job_post_id: uuid.UUID) -> JobPostAvailabilityOut:
         await self._require_job_post(job_post_id)
-        config = await self._get_or_make_config()
-        custom = await self._windows(job_post_id)
-        effective = custom if custom else await self._windows(None)
+        config = await self.availability.get_or_create_config()
+        custom = await self.availability.windows(job_post_id)
+        effective = custom if custom else await self.availability.windows(None)
         return JobPostAvailabilityOut(
             uses_custom_windows=bool(custom),
             windows=self._windows_out(effective),
@@ -312,68 +238,28 @@ class InterviewAvailabilityService:
         await self._require_job_post(job_post_id)
         await self._replace_windows(job_post_id, payload.windows)
 
-        await self.db.execute(
-            delete(JobPostInterviewer).where(
-                JobPostInterviewer.job_post_id == job_post_id
-            )
-        )
-        if payload.interviewer_ids:
-            valid = set(
-                (
-                    await self.db.execute(
-                        select(User.id).where(User.id.in_(payload.interviewer_ids))
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for user_id in dict.fromkeys(payload.interviewer_ids):
+        interviewer_ids = list(dict.fromkeys(payload.interviewer_ids or []))
+        if interviewer_ids:
+            valid = await self.availability.valid_user_ids(interviewer_ids)
+            for user_id in interviewer_ids:
                 if user_id not in valid:
                     raise UnknownInterviewerError(f"User '{user_id}' does not exist")
-                self.db.add(
-                    JobPostInterviewer(
-                        id=uuid.uuid4(),
-                        job_post_id=job_post_id,
-                        user_id=user_id,
-                    )
-                )
-        await self.db.commit()
+        await self.availability.replace_interviewers(job_post_id, interviewer_ids)
+        await self.uow.commit()
         return await self.get_for_job_post(job_post_id)
 
     # -- slot generation --------------------------------------------
 
     async def _resolved_windows(
         self, job_post_id: uuid.UUID
-    ) -> list[InterviewAvailabilityRule]:
-        custom = await self._windows(job_post_id)
-        return custom if custom else await self._windows(None)
-
-    async def _booked_intervals(
-        self, exclude_request_id: uuid.UUID | None
-    ) -> list[tuple[datetime, int]]:
-        """`(start, duration_minutes)` for every confirmed interview across the
-        org — used to block times that overlap an existing booking, not just
-        exact-instant clashes."""
-        stmt = (
-            select(InterviewSlot.starts_at, InterviewRequest.duration_minutes)
-            .join(
-                InterviewRequest,
-                InterviewRequest.id == InterviewSlot.request_id,
-            )
-            .join(Application, Application.id == InterviewRequest.application_id)
-            .where(
-                InterviewSlot.selected_at.is_not(None),
-                Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
-            )
-        )
-        if exclude_request_id is not None:
-            stmt = stmt.where(InterviewSlot.request_id != exclude_request_id)
-        return [(row[0], row[1]) for row in (await self.db.execute(stmt)).all()]
+    ) -> list[entities.AvailabilityWindow]:
+        custom = await self.availability.windows(job_post_id)
+        return custom if custom else await self.availability.windows(None)
 
     async def open_slots_for_application(
         self, application_id: uuid.UUID
     ) -> list[OpenSlotOut]:
-        application = await self.db.get(Application, application_id)
+        application = await self.availability.get_application(application_id)
         if application is None:
             raise InterviewApplicationNotFoundError(
                 f"Application '{application_id}' not found"
@@ -384,16 +270,10 @@ class InterviewAvailabilityService:
                 f"is in the interview stage (currently '{application.status}')"
             )
 
-        request = (
-            await self.db.execute(
-                select(InterviewRequest).where(
-                    InterviewRequest.application_id == application_id
-                )
-            )
-        ).scalar_one_or_none()
+        request = await self.availability.get_request_for_application(application_id)
         duration = request.duration_minutes if request else None
 
-        config = await self._get_or_make_config()
+        config = await self.availability.get_or_create_config()
         step = duration or config.slot_minutes
         try:
             tz = ZoneInfo(config.timezone)
@@ -401,10 +281,10 @@ class InterviewAvailabilityService:
             tz = UTC
 
         rules = await self._resolved_windows(application.job_post_id)
-        overrides = await self._overrides(None)
+        overrides = await self.availability.overrides(None)
         if not rules and not overrides:
             return []
-        by_weekday: dict[int, list[InterviewAvailabilityRule]] = {}
+        by_weekday: dict[int, list[entities.AvailabilityWindow]] = {}
         for rule in rules:
             by_weekday.setdefault(rule.weekday, []).append(rule)
 
@@ -428,7 +308,9 @@ class InterviewAvailabilityService:
 
         now = datetime.now(UTC)
         earliest = now + timedelta(hours=config.min_notice_hours)
-        booked = await self._booked_intervals(request.id if request else None)
+        booked = await self.availability.booked_intervals(
+            request.id if request else None
+        )
 
         def overlaps_booked(start: datetime) -> bool:
             end = start + timedelta(minutes=step)

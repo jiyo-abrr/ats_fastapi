@@ -29,6 +29,98 @@ class AssessmentAttemptReopen:
 
 
 @dataclass
+class SnapshotQuestion:
+    """A question exactly as it read at attempt-issuance time. Same attribute
+    surface as PreAssessmentQuestion/CultureFitQuestion/TechnicalAssessmentQuestion
+    (order_index/prompt/question_type/config/time_limit_seconds) so the service
+    can treat a snapshot and a live template interchangeably."""
+
+    id: uuid.UUID
+    order_index: int
+    prompt: str
+    question_type: str
+    config: dict | None = None
+    time_limit_seconds: int | None = None
+
+
+@dataclass
+class TemplateSnapshot:
+    """A frozen copy of the template (title/instructions/timer/questions) taken
+    when the attempt was created (`create_attempts_for_application`). Reads and
+    validation use this instead of re-fetching the live template, so an HR edit
+    to the template after issuance can't change what an already-answered
+    question looked like or silently shift a timer mid-attempt (review F04 /
+    docs/decisions/D03). Same attribute surface as a live template entity
+    (title/instructions/time_limit_minutes/questions)."""
+
+    title: str
+    instructions: str | None
+    time_limit_minutes: int | None
+    questions: list[SnapshotQuestion] = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        """JSON-safe form for the `template_snapshot` JSONB column."""
+        return {
+            "title": self.title,
+            "instructions": self.instructions,
+            "time_limit_minutes": self.time_limit_minutes,
+            "questions": [
+                {
+                    "id": str(q.id),
+                    "order_index": q.order_index,
+                    "prompt": q.prompt,
+                    "question_type": q.question_type,
+                    "config": q.config,
+                    "time_limit_seconds": q.time_limit_seconds,
+                }
+                for q in self.questions
+            ],
+        }
+
+    @classmethod
+    def from_json(cls, data: dict | None) -> "TemplateSnapshot | None":
+        if data is None:
+            return None
+        return cls(
+            title=data["title"],
+            instructions=data.get("instructions"),
+            time_limit_minutes=data.get("time_limit_minutes"),
+            questions=[
+                SnapshotQuestion(
+                    id=uuid.UUID(q["id"]),
+                    order_index=q["order_index"],
+                    prompt=q["prompt"],
+                    question_type=q["question_type"],
+                    config=q.get("config"),
+                    time_limit_seconds=q.get("time_limit_seconds"),
+                )
+                for q in data.get("questions", [])
+            ],
+        )
+
+    @classmethod
+    def from_template(cls, template) -> "TemplateSnapshot":
+        """Build a snapshot from a live template entity (Pre/CultureFit/
+        Technical — they share this attribute shape) at attempt-issuance time."""
+        return cls(
+            title=template.title,
+            instructions=template.instructions,
+            time_limit_minutes=template.time_limit_minutes,
+            questions=[
+                SnapshotQuestion(
+                    id=q.id,
+                    order_index=q.order_index,
+                    prompt=q.prompt,
+                    question_type=q.question_type,
+                    config=q.config,
+                    time_limit_seconds=q.time_limit_seconds,
+                )
+                for q in template.questions
+            ],
+        )
+
+
+@dataclass
 class AssessmentAttempt:
     id: uuid.UUID
     application_id: uuid.UUID
@@ -43,6 +135,9 @@ class AssessmentAttempt:
     # to a router — the count comes from the attempt's template, which lives in
     # one of 3 other domains. 0 on the raw repo entity (scheduler paths).
     total_questions: int = 0
+    # None only for attempts created before this snapshot existed (the service
+    # falls back to a live template fetch for those — see _get_template).
+    template_snapshot: TemplateSnapshot | None = None
 
 
 @dataclass

@@ -28,10 +28,11 @@ from app.domains.tags import models as tag_models  # noqa: F401
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-# Default to the configured DATABASE_URL, but let a caller (e.g. the integration
-# test harness) pre-set `sqlalchemy.url` on the Config to point migrations at a
-# throwaway database.
-if not config.get_main_option("sqlalchemy.url", None):
+# Default to the configured DATABASE_URL. A caller (e.g. the integration test
+# harness) can override migrations' target DB by pre-setting `sqlalchemy.url`
+# on the Config to a real URL; the placeholder from alembic.ini doesn't count.
+_url = config.get_main_option("sqlalchemy.url", "")
+if not _url or _url.startswith("driver://"):
     config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.

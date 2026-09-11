@@ -1,4 +1,6 @@
 import uuid
+from collections import defaultdict
+from collections.abc import Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -25,31 +27,16 @@ _EAGER_OPTIONS = (
 class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID]):
     model = JobPostModel
 
-    async def _to_entity(self, obj: JobPostModel) -> entities.JobPost:
-        tags_result = await self.db.execute(
-            select(TagModel)
-            .join(JobPostTag, JobPostTag.tag_id == TagModel.id)
-            .where(JobPostTag.job_post_id == obj.id)
-        )
-        tags = tags_result.scalars().all()
-
-        exclusions_result = await self.db.execute(
-            select(JobPostExclusion).where(JobPostExclusion.job_post_id == obj.id)
-        )
-        excluded_ids = [
-            row.excluded_job_post_id for row in exclusions_result.scalars().all()
-        ]
-
-        pre_assessment_template_id = await self._get_attached_template_id(
-            JobPostPreAssessmentTemplate, obj.id
-        )
-        culture_fit_template_id = await self._get_attached_template_id(
-            JobPostCultureFitTemplate, obj.id
-        )
-        technical_assessment_template_id = await self._get_attached_template_id(
-            JobPostTechnicalAssessmentTemplate, obj.id
-        )
-
+    @staticmethod
+    def _build(
+        obj: JobPostModel,
+        *,
+        tags: list[TagModel],
+        excluded_ids: list[uuid.UUID],
+        pre_id: uuid.UUID | None,
+        cf_id: uuid.UUID | None,
+        tech_id: uuid.UUID | None,
+    ) -> entities.JobPost:
         return entities.JobPost(
             id=obj.id,
             job_title=obj.job_title,
@@ -68,12 +55,110 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             assessment_window_days=obj.assessment_window_days,
             tags=[Tag(id=t.id, name=t.name, description=t.description) for t in tags],
             excluded_job_post_ids=excluded_ids,
-            pre_assessment_template_id=pre_assessment_template_id,
-            culture_fit_template_id=culture_fit_template_id,
-            technical_assessment_template_id=technical_assessment_template_id,
+            pre_assessment_template_id=pre_id,
+            culture_fit_template_id=cf_id,
+            technical_assessment_template_id=tech_id,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
+
+    async def _to_entity(self, obj: JobPostModel) -> entities.JobPost:
+        # Single-row path (get_by_id) — a handful of small lookups is fine here;
+        # the paginated list path uses map_many() which bulk-fetches instead
+        # (see review F08).
+        tags = list(
+            (
+                await self.db.execute(
+                    select(TagModel)
+                    .join(JobPostTag, JobPostTag.tag_id == TagModel.id)
+                    .where(JobPostTag.job_post_id == obj.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        excluded_ids = [
+            row[0]
+            for row in (
+                await self.db.execute(
+                    select(JobPostExclusion.excluded_job_post_id).where(
+                        JobPostExclusion.job_post_id == obj.id
+                    )
+                )
+            ).all()
+        ]
+        return self._build(
+            obj,
+            tags=tags,
+            excluded_ids=excluded_ids,
+            pre_id=await self._get_attached_template_id(
+                JobPostPreAssessmentTemplate, obj.id
+            ),
+            cf_id=await self._get_attached_template_id(
+                JobPostCultureFitTemplate, obj.id
+            ),
+            tech_id=await self._get_attached_template_id(
+                JobPostTechnicalAssessmentTemplate, obj.id
+            ),
+        )
+
+    async def map_many(self, rows: Sequence[JobPostModel]) -> list[entities.JobPost]:
+        """Bulk-fetch related data for a whole page in a fixed number of
+        queries (review F08): 1 for tags, 1 for exclusions, 3 for the template
+        attachments — regardless of page size."""
+        rows = list(rows)
+        if not rows:
+            return []
+        ids = [r.id for r in rows]
+
+        tags_by_post: dict[uuid.UUID, list[TagModel]] = defaultdict(list)
+        for jp_id, tag in (
+            await self.db.execute(
+                select(JobPostTag.job_post_id, TagModel)
+                .join(TagModel, TagModel.id == JobPostTag.tag_id)
+                .where(JobPostTag.job_post_id.in_(ids))
+            )
+        ).all():
+            tags_by_post[jp_id].append(tag)
+
+        excl_by_post: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+        for jp_id, excl_id in (
+            await self.db.execute(
+                select(
+                    JobPostExclusion.job_post_id,
+                    JobPostExclusion.excluded_job_post_id,
+                ).where(JobPostExclusion.job_post_id.in_(ids))
+            )
+        ).all():
+            excl_by_post[jp_id].append(excl_id)
+
+        async def _template_map(join_model) -> dict[uuid.UUID, uuid.UUID]:
+            return {
+                jp_id: t_id
+                for jp_id, t_id in (
+                    await self.db.execute(
+                        select(join_model.job_post_id, join_model.template_id).where(
+                            join_model.job_post_id.in_(ids)
+                        )
+                    )
+                ).all()
+            }
+
+        pre = await _template_map(JobPostPreAssessmentTemplate)
+        cf = await _template_map(JobPostCultureFitTemplate)
+        tech = await _template_map(JobPostTechnicalAssessmentTemplate)
+
+        return [
+            self._build(
+                r,
+                tags=tags_by_post.get(r.id, []),
+                excluded_ids=excl_by_post.get(r.id, []),
+                pre_id=pre.get(r.id),
+                cf_id=cf.get(r.id),
+                tech_id=tech.get(r.id),
+            )
+            for r in rows
+        ]
 
     async def _get_attached_template_id(
         self, join_model, job_post_id: uuid.UUID

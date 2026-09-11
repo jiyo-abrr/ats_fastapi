@@ -19,6 +19,7 @@ from app.domains.applications.enums import (
 from app.domains.applications.exceptions import (
     ApplicantExcludedError,
     ApplicationNotFoundError,
+    ConcurrentApplicationUpdateError,
     DuplicateApplicationError,
     InvalidApplicationStatusTransitionError,
     InvalidAssessmentDeadlineExtensionError,
@@ -212,9 +213,15 @@ class ApplicationService:
             raise InvalidApplicationStatusTransitionError(
                 f"Cannot withdraw an application with status '{application.status}'"
             )
-        await self.applications.update_status(
-            application_id, ApplicationStatus.WITHDRAWN
-        )
+        if not await self.applications.compare_and_set_status(
+            application_id,
+            expected=application.status,
+            new=ApplicationStatus.WITHDRAWN.value,
+        ):
+            await self.uow.rollback()
+            raise ConcurrentApplicationUpdateError(
+                "This application was updated by someone else — refresh and retry."
+            )
         await self.uow.commit()
         return await self.applications.get_by_id(application_id)
 
@@ -236,7 +243,13 @@ class ApplicationService:
                 f"Cannot transition application from '{application.status}' to "
                 f"'{new_status}'"
             )
-        await self.applications.update_status(application_id, new_status)
+        if not await self.applications.compare_and_set_status(
+            application_id, expected=application.status, new=new_status.value
+        ):
+            await self.uow.rollback()
+            raise ConcurrentApplicationUpdateError(
+                "This application was updated by someone else — refresh and retry."
+            )
         await self.uow.commit()
         return await self.applications.get_by_id(application_id)
 
@@ -294,9 +307,12 @@ class ApplicationService:
         # Extending the deadline on a disqualified application IS the un-
         # disqualify action — nothing else moves it out of that terminal
         # status, since the scheduler only ever disqualifies, never revives.
+        # Conditional so a concurrent sweep/extend can't double-move it.
         if current_status == ApplicationStatus.DISQUALIFIED:
-            await self.applications.update_status(
-                application_id, ApplicationStatus.APPLIED
+            await self.applications.compare_and_set_status(
+                application_id,
+                expected=ApplicationStatus.DISQUALIFIED.value,
+                new=ApplicationStatus.APPLIED.value,
             )
         await self.applications.add_deadline_extension(
             entities.AssessmentDeadlineExtension(
@@ -318,7 +334,11 @@ class ApplicationService:
         application = await self.applications.get_by_id(application_id)
         if application is None or application.status != ApplicationStatus.APPLIED:
             return
-        await self.applications.update_status(
-            application_id, ApplicationStatus.DISQUALIFIED
+        # Conditional: if a human moved it out of `applied` between the read
+        # above and here, the update simply matches no row — still a no-op.
+        await self.applications.compare_and_set_status(
+            application_id,
+            expected=ApplicationStatus.APPLIED.value,
+            new=ApplicationStatus.DISQUALIFIED.value,
         )
         await self.uow.commit()

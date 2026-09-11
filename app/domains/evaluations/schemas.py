@@ -137,3 +137,20 @@ class JobEvaluationRowOut(BaseModel):
     applicant_last_name: str
     applicant_email: str
     evaluation: ApplicationEvaluationOut | None = None
+
+
+class EvaluationExportJobOut(BaseModel):
+    """Status of a background evaluation-pack export (review F09/F26). Poll
+    `GET /applications/export-jobs/{id}` until `status` is `done` or `failed`,
+    then `GET .../download`."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    job_post_id: uuid.UUID
+    status: str
+    status_filter: str | None
+    error_message: str | None
+    created_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None

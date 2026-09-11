@@ -7,3 +7,7 @@ class EvaluationNotFoundError(NotFoundError):
 
 class EmptyEvaluationImportError(ValidationError):
     """The import payload contained no evaluations."""
+
+
+class EvaluationExportJobNotFoundError(NotFoundError):
+    """No such background evaluation-pack export job."""

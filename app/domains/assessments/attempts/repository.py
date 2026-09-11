@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 
 from app.core.repository import BaseRepository
 from app.domains.assessments.attempts import entities
@@ -50,6 +51,9 @@ class AssessmentAttemptRepository(
             completed_at=obj.completed_at,
             answers=await self.list_live_answers(obj.id),
             reopens=await self.list_reopens(obj.id),
+            template_snapshot=entities.TemplateSnapshot.from_json(
+                obj.template_snapshot
+            ),
         )
 
     def _to_model(self, entity: entities.AssessmentAttempt) -> AssessmentAttemptModel:
@@ -59,6 +63,11 @@ class AssessmentAttemptRepository(
             template_type=entity.template_type,
             template_id=entity.template_id,
             status=entity.status,
+            template_snapshot=(
+                entity.template_snapshot.to_json()
+                if entity.template_snapshot is not None
+                else None
+            ),
         )
 
     async def list_for_application(
@@ -101,27 +110,43 @@ class AssessmentAttemptRepository(
         )
         return {row[0]: row[1] for row in result.all()}
 
-    async def start_attempt(self, attempt_id: uuid.UUID, started_at: datetime) -> None:
-        obj = await self.db.get(AssessmentAttemptModel, attempt_id)
-        if obj is None:
-            return
-        obj.status = "in_progress"
-        obj.started_at = started_at
+    async def compare_and_set_status(
+        self, attempt_id: uuid.UUID, *, expected: str, new: str, **extra_values
+    ) -> bool:
+        """`UPDATE … SET status = :new, <extra_values> WHERE id = :id AND
+        status = :expected`. Returns whether a row changed — False means the
+        attempt was no longer in `expected` (another request already moved it,
+        e.g. a concurrent complete vs. expire). Used so two such writes can't
+        silently clobber each other (review F02)."""
+        result = await self.db.execute(
+            sa_update(AssessmentAttemptModel)
+            .where(
+                AssessmentAttemptModel.id == attempt_id,
+                AssessmentAttemptModel.status == expected,
+            )
+            .values(status=new, **extra_values)
+        )
+        return (result.rowcount or 0) == 1
+
+    async def start_attempt(self, attempt_id: uuid.UUID, started_at: datetime) -> bool:
+        return await self.compare_and_set_status(
+            attempt_id, expected="not_started", new="in_progress", started_at=started_at
+        )
 
     async def complete_attempt(
         self, attempt_id: uuid.UUID, completed_at: datetime
-    ) -> None:
-        obj = await self.db.get(AssessmentAttemptModel, attempt_id)
-        if obj is None:
-            return
-        obj.status = "completed"
-        obj.completed_at = completed_at
+    ) -> bool:
+        return await self.compare_and_set_status(
+            attempt_id,
+            expected="in_progress",
+            new="completed",
+            completed_at=completed_at,
+        )
 
-    async def expire_attempt(self, attempt_id: uuid.UUID) -> None:
-        obj = await self.db.get(AssessmentAttemptModel, attempt_id)
-        if obj is None:
-            return
-        obj.status = "expired"
+    async def expire_attempt(self, attempt_id: uuid.UUID) -> bool:
+        return await self.compare_and_set_status(
+            attempt_id, expected="in_progress", new="expired"
+        )
 
     async def reset_attempt(self, attempt_id: uuid.UUID) -> None:
         obj = await self.db.get(AssessmentAttemptModel, attempt_id)
@@ -131,27 +156,52 @@ class AssessmentAttemptRepository(
         obj.started_at = None
         obj.completed_at = None
 
-    async def list_in_progress_attempts(self) -> list[entities.AssessmentAttempt]:
+    async def exists_for_template(
+        self, template_type: str, template_id: uuid.UUID
+    ) -> bool:
+        """Any attempt (live or not) that points at this template — there is no
+        DB FK across the boundary, so deletion has to check here (review F04)."""
         result = await self.db.execute(
-            select(AssessmentAttemptModel).where(
-                AssessmentAttemptModel.status == "in_progress"
+            select(AssessmentAttemptModel.id)
+            .where(
+                AssessmentAttemptModel.template_type == template_type,
+                AssessmentAttemptModel.template_id == template_id,
             )
+            .limit(1)
         )
+        return result.first() is not None
+
+    async def list_in_progress_attempts(
+        self, *, limit: int | None = None
+    ) -> list[entities.AssessmentAttempt]:
+        stmt = select(AssessmentAttemptModel).where(
+            AssessmentAttemptModel.status == "in_progress"
+        )
+        if limit is not None:
+            stmt = stmt.order_by(AssessmentAttemptModel.id).limit(limit)
+        result = await self.db.execute(stmt)
         return [await self._to_entity(obj) for obj in result.scalars().all()]
 
     async def find_overdue_in_progress_attempts(
-        self, now: datetime
+        self, now: datetime, *, limit: int | None = None
     ) -> list[entities.AssessmentAttempt]:
         # No single FK target for template_id (3 possible tables), so this
         # can't be a plain join like the old single-table version — fetch
         # in-progress attempts, then look up each one's template by
-        # dispatching on template_type.
-        result = await self.db.execute(
-            select(AssessmentAttemptModel).where(
+        # dispatching on template_type. `limit` bounds one sweep pass (review
+        # F16) — it's applied to the candidate scan, not the final overdue
+        # count, so a pass can legitimately return fewer than `limit` rows.
+        stmt = (
+            select(AssessmentAttemptModel)
+            .where(
                 AssessmentAttemptModel.status == "in_progress",
                 AssessmentAttemptModel.started_at.is_not(None),
             )
+            .order_by(AssessmentAttemptModel.id)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self.db.execute(stmt)
         overdue = []
         for obj in result.scalars().all():
             template_model = _TEMPLATE_MODEL_BY_TYPE[TemplateType(obj.template_type)]

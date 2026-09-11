@@ -6,33 +6,52 @@ on:
   pull_request:
 
 jobs:
-  check:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-
-      - name: Sync dependencies
-        run: uv sync --frozen
-
+      - run: uv sync --frozen
       - name: Ruff lint
         run: uv run ruff check .
-
       - name: Ruff format
         run: uv run ruff format --check .
 
-      - name: Tests
-        # The unit suite needs no services, but it does load config.
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
         env:
-          DATABASE_URL: postgresql+psycopg://ats:ats@localhost:5432/ats
-          JWT_SECRET_KEY: ci-not-a-real-secret-ci-not-a-real-secret
-          MINIO_ENDPOINT: localhost:9000
-          MINIO_ACCESS_KEY: ci
-          MINIO_SECRET_KEY: ci
-          MINIO_BUCKET: resumes
-          REDIS_URL: redis://localhost:6379/0
+          POSTGRES_USER: ats
+          POSTGRES_PASSWORD: ats
+          POSTGRES_DB: ats
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql+psycopg://ats:ats@localhost:5432/ats
+      JWT_SECRET_KEY: ci-not-a-real-secret-ci-not-a-real-secret
+      MINIO_ENDPOINT: localhost:9000
+      MINIO_ACCESS_KEY: ci
+      MINIO_SECRET_KEY: ci
+      MINIO_BUCKET: resumes
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Tests (unit + integration)
+        # Integration tests self-skip if Postgres is unreachable; here it is up,
+        # so they run.
         run: uv run pytest -q

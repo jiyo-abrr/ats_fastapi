@@ -1,9 +1,11 @@
 import uuid
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Computed,
     Date,
     DateTime,
     ForeignKey,
@@ -13,7 +15,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import TSTZRANGE, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -246,6 +248,21 @@ class InterviewSlot(Base):
         nullable=False,
     )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Denormalized from the parent request's duration_minutes at write time and
+    # kept in sync on any duration edit (InterviewService.set_request) — needed
+    # so the DB can enforce non-overlap by itself (see `during` / the
+    # ex_interview_slots_no_overlap exclusion constraint below; review F03).
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # DB-generated range mirror of [starts_at, ends_at) — exists solely so
+    # `ex_interview_slots_no_overlap` (an EXCLUDE ... WHERE selected_at IS NOT
+    # NULL constraint on it, added in the same migration) can enforce
+    # non-overlap of confirmed slots at the database level. Never read or
+    # written from Python — `Computed` excludes it from INSERT/UPDATE.
+    during: Mapped[Any] = mapped_column(
+        TSTZRANGE(),
+        Computed("tstzrange(starts_at, ends_at, '[)')", persisted=True),
+        nullable=True,
+    )
     selected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

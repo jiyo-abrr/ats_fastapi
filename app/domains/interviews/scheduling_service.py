@@ -10,15 +10,12 @@ already in `interview`.
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.enums import ApplicationStatus
-from app.domains.applications.models import Application
-from app.domains.auth.models import User
+from app.domains.interviews import entities
 from app.domains.interviews.availability_service import InterviewAvailabilityService
-from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
     InterviewApplicationNotFoundError,
@@ -26,10 +23,7 @@ from app.domains.interviews.exceptions import (
     SlotNotOnRequestError,
     SlotUnavailableError,
 )
-from app.domains.interviews.models import (
-    InterviewRequest,
-    InterviewSlot,
-)
+from app.domains.interviews.repository import InterviewRepository
 from app.domains.interviews.schemas import (
     InterviewRequestIn,
     InterviewRequestOut,
@@ -38,17 +32,21 @@ from app.domains.interviews.schemas import (
     SelectSlotIn,
     UpcomingInterviewOut,
 )
-from app.domains.job_posts.models import JobPost
 
 
 class InterviewService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
+    def __init__(
+        self,
+        interviews: InterviewRepository,
+        availability: InterviewAvailabilityService,
+        uow: UnitOfWork,
+    ):
+        self.interviews = interviews
+        self.availability = availability
+        self.uow = uow
 
-    async def _require_application_in_interview(
-        self, application_id: uuid.UUID
-    ) -> Application:
-        application = await self.db.get(Application, application_id)
+    async def _require_application_in_interview(self, application_id: uuid.UUID):
+        application = await self.interviews.get_application(application_id)
         if application is None:
             raise InterviewApplicationNotFoundError(
                 f"Application '{application_id}' not found"
@@ -60,34 +58,8 @@ class InterviewService:
             )
         return application
 
-    async def _load(
-        self, application_id: uuid.UUID
-    ) -> tuple[InterviewRequest, list[InterviewSlot]] | None:
-        request = (
-            await self.db.execute(
-                select(InterviewRequest).where(
-                    InterviewRequest.application_id == application_id
-                )
-            )
-        ).scalar_one_or_none()
-        if request is None:
-            return None
-        slots = list(
-            (
-                await self.db.execute(
-                    select(InterviewSlot)
-                    .where(InterviewSlot.request_id == request.id)
-                    .order_by(InterviewSlot.starts_at)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return request, slots
-
-    def _to_out(
-        self, request: InterviewRequest, slots: list[InterviewSlot]
-    ) -> InterviewRequestOut:
+    def _to_out(self, request: entities.InterviewRequest) -> InterviewRequestOut:
+        slots = request.slots or []
         selected = next((s for s in slots if s.selected_at is not None), None)
         return InterviewRequestOut(
             id=request.id,
@@ -114,10 +86,10 @@ class InterviewService:
     async def get_for_application(
         self, application_id: uuid.UUID
     ) -> InterviewRequestOut | None:
-        loaded = await self._load(application_id)
-        if loaded is None:
+        request = await self.interviews.get_request_with_slots(application_id)
+        if request is None:
             return None
-        return self._to_out(*loaded)
+        return self._to_out(request)
 
     async def set_request(
         self,
@@ -127,31 +99,38 @@ class InterviewService:
         created_by_user_id: uuid.UUID,
     ) -> InterviewRequestOut:
         await self._require_application_in_interview(application_id)
-        loaded = await self._load(application_id)
+        loaded = await self.interviews.get_request_with_slots(application_id)
 
         self_scheduled = not payload.slots
 
         if loaded is None:
-            request = InterviewRequest(
-                id=uuid.uuid4(),
-                application_id=application_id,
-                created_by_user_id=created_by_user_id,
+            request_id = uuid.uuid4()
+            await self.interviews.create_request(
+                entities.InterviewRequest(
+                    id=request_id,
+                    application_id=application_id,
+                    created_by_user_id=created_by_user_id,
+                    mode=payload.mode,
+                    location_or_link=payload.location_or_link,
+                    duration_minutes=payload.duration_minutes,
+                    notes=payload.notes,
+                    self_scheduled=self_scheduled,
+                )
+            )
+            existing_slots: list[entities.InterviewSlot] = []
+            duration_minutes = payload.duration_minutes
+        else:
+            request_id = loaded.id
+            existing_slots = loaded.slots or []
+            duration_minutes = payload.duration_minutes
+            await self.interviews.update_request_fields(
+                request_id,
                 mode=payload.mode,
                 location_or_link=payload.location_or_link,
                 duration_minutes=payload.duration_minutes,
                 notes=payload.notes,
                 self_scheduled=self_scheduled,
             )
-            self.db.add(request)
-            await self.db.flush()
-            existing_slots: list[InterviewSlot] = []
-        else:
-            request, existing_slots = loaded
-            request.mode = payload.mode
-            request.location_or_link = payload.location_or_link
-            request.duration_minutes = payload.duration_minutes
-            request.notes = payload.notes
-            request.self_scheduled = self_scheduled
 
         # Reconcile slots by start time so editing the logistics (or adding a
         # time) keeps any selection the applicant already made. In self-schedule
@@ -162,50 +141,27 @@ class InterviewService:
 
         for starts_at, slot in current.items():
             if starts_at not in wanted and slot.selected_at is None:
-                await self.db.delete(slot)
+                await self.interviews.delete_slot(slot.id)
+            elif starts_at in wanted:
+                # Keep ends_at in sync with duration_minutes even when the
+                # start time itself doesn't change — otherwise editing the
+                # duration on an existing offer would silently desync the
+                # DB-enforced non-overlap range (review F03).
+                await self.interviews.update_slot_ends_at(
+                    slot.id, starts_at + timedelta(minutes=duration_minutes)
+                )
         for starts_at in wanted - set(current):
-            self.db.add(
-                InterviewSlot(
+            await self.interviews.add_slot(
+                entities.InterviewSlot(
                     id=uuid.uuid4(),
-                    request_id=request.id,
+                    request_id=request_id,
                     starts_at=starts_at,
+                    ends_at=starts_at + timedelta(minutes=duration_minutes),
                 )
             )
 
-        await self.db.commit()
+        await self.uow.commit()
         return await self.get_for_application(application_id)  # type: ignore[return-value]
-
-    async def _overlaps_confirmed(
-        self,
-        request_id: uuid.UUID,
-        starts_at: datetime,
-        duration_minutes: int,
-    ) -> bool:
-        """Any other confirmed interview whose [start, end) overlaps this one."""
-        end = starts_at + timedelta(minutes=duration_minutes)
-        rows = (
-            await self.db.execute(
-                select(InterviewSlot.starts_at, InterviewRequest.duration_minutes)
-                .join(
-                    InterviewRequest,
-                    InterviewRequest.id == InterviewSlot.request_id,
-                )
-                .join(
-                    Application,
-                    Application.id == InterviewRequest.application_id,
-                )
-                .where(
-                    InterviewSlot.selected_at.is_not(None),
-                    InterviewSlot.request_id != request_id,
-                    Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
-                )
-            )
-        ).all()
-        return any(
-            starts_at < other_start + timedelta(minutes=other_minutes)
-            and end > other_start
-            for other_start, other_minutes in rows
-        )
 
     async def select_slot(
         self,
@@ -215,12 +171,12 @@ class InterviewService:
         selected_by_user_id: uuid.UUID,
     ) -> InterviewRequestOut:
         await self._require_application_in_interview(application_id)
-        loaded = await self._load(application_id)
-        if loaded is None:
+        request = await self.interviews.get_request_with_slots(application_id)
+        if request is None:
             raise InterviewRequestNotFoundError(
                 "No interview has been scheduled for this application yet"
             )
-        request, slots = loaded
+        slots = request.slots or []
         now = datetime.now(UTC)
 
         # Idempotent re-confirmation: selecting the slot that is already the
@@ -233,7 +189,7 @@ class InterviewService:
                 payload.starts_at is not None and already.starts_at == payload.starts_at
             )
         ):
-            return self._to_out(request, slots)
+            return self._to_out(request)
 
         if payload.slot_id is not None:
             target = next((s for s in slots if s.id == payload.slot_id), None)
@@ -243,7 +199,7 @@ class InterviewService:
                 )
             if target.starts_at <= now:
                 raise SlotUnavailableError("That time is in the past — pick another.")
-            if await self._overlaps_confirmed(
+            if await self.interviews.overlaps_confirmed(
                 request.id, target.starts_at, request.duration_minutes
             ):
                 raise SlotUnavailableError(
@@ -258,37 +214,40 @@ class InterviewService:
                     "(slot_id), not an arbitrary time."
                 )
             # ...and it must still be open right now.
-            open_slots = await InterviewAvailabilityService(
-                self.db
-            ).open_slots_for_application(application_id)
+            open_slots = await self.availability.open_slots_for_application(
+                application_id
+            )
             if not any(s.starts_at == payload.starts_at for s in open_slots):
                 raise SlotUnavailableError(
                     "That time is no longer available — pick another."
                 )
             target = next((s for s in slots if s.starts_at == payload.starts_at), None)
             if target is None:
-                target = InterviewSlot(
+                target = entities.InterviewSlot(
                     id=uuid.uuid4(),
                     request_id=request.id,
                     starts_at=payload.starts_at,
+                    ends_at=payload.starts_at
+                    + timedelta(minutes=request.duration_minutes),
                 )
-                self.db.add(target)
+                await self.interviews.add_slot(target)
                 slots.append(target)
 
         # Final overlap guard (covers a booking that landed between the
         # open-slots check and here); the exact-instant unique index is the
         # last line of defence at commit.
-        if target.selected_at is None and await self._overlaps_confirmed(
+        if target.selected_at is None and await self.interviews.overlaps_confirmed(
             request.id, target.starts_at, request.duration_minutes
         ):
             raise SlotUnavailableError("That time was just taken — pick another.")
 
         for slot in slots:
             slot.selected_at = now if slot is target else None
+        await self.interviews.sync_slot_selections(slots)
         try:
-            await self.db.commit()
+            await self.uow.commit()
         except IntegrityError as exc:
-            await self.db.rollback()
+            await self.uow.rollback()
             raise SlotUnavailableError(
                 "That time was just taken — pick another."
             ) from exc
@@ -302,30 +261,11 @@ class InterviewService:
         list. A self-scheduled request has zero slot rows until the candidate
         books one, so this must NOT inner-join to slots (that would silently
         drop exactly the requests that most need the nudge)."""
-        if not application_ids:
-            return set()
-        confirmed_request_ids = (
-            select(InterviewSlot.request_id)
-            .where(InterviewSlot.selected_at.is_not(None))
-            .scalar_subquery()
-        )
-        rows = (
-            await self.db.execute(
-                select(InterviewRequest.application_id).where(
-                    InterviewRequest.application_id.in_(application_ids),
-                    InterviewRequest.id.not_in(confirmed_request_ids),
-                )
-            )
-        ).all()
-        return {row[0] for row in rows}
+        return await self.interviews.applications_awaiting_slot_pick(application_ids)
 
     async def delete_request(self, application_id: uuid.UUID) -> None:
-        await self.db.execute(
-            delete(InterviewRequest).where(
-                InterviewRequest.application_id == application_id
-            )
-        )
-        await self.db.commit()
+        await self.interviews.delete_request(application_id)
+        await self.uow.commit()
 
     async def statuses_for_job_post(
         self, job_post_id: uuid.UUID
@@ -333,27 +273,7 @@ class InterviewService:
         """`awaiting` / `confirmed` per application that has an interview
         request, for one job post — drives the pipeline view's Interview
         column."""
-        rows = (
-            await self.db.execute(
-                select(
-                    InterviewRequest.application_id,
-                    InterviewSlot.starts_at,
-                    InterviewSlot.selected_at,
-                )
-                .join(
-                    Application,
-                    Application.id == InterviewRequest.application_id,
-                )
-                .outerjoin(
-                    InterviewSlot,
-                    InterviewSlot.request_id == InterviewRequest.id,
-                )
-                .where(
-                    Application.job_post_id == job_post_id,
-                    Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
-                )
-            )
-        ).all()
+        rows = await self.interviews.statuses_for_job_post(job_post_id)
         by_app: dict[uuid.UUID, InterviewStatusOut] = {}
         for application_id, starts_at, selected_at in rows:
             entry = by_app.setdefault(
@@ -364,36 +284,6 @@ class InterviewService:
                 entry.state = "confirmed"
                 entry.starts_at = starts_at
         return list(by_app.values())
-
-    @staticmethod
-    def _confirmed_interviews_query():
-        return (
-            select(
-                InterviewRequest.application_id,
-                InterviewRequest.mode,
-                InterviewRequest.location_or_link,
-                InterviewRequest.duration_minutes,
-                InterviewSlot.starts_at,
-                User.first_name,
-                User.last_name,
-                JobPost.job_title,
-            )
-            .join(
-                InterviewRequest,
-                InterviewRequest.id == InterviewSlot.request_id,
-            )
-            .join(
-                Application,
-                Application.id == InterviewRequest.application_id,
-            )
-            .join(User, User.id == Application.applicant_id)
-            .join(JobPost, JobPost.id == Application.job_post_id)
-            .where(
-                InterviewSlot.selected_at.is_not(None),
-                Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
-            )
-            .order_by(InterviewSlot.starts_at)
-        )
 
     @staticmethod
     def _to_scheduled(r) -> UpcomingInterviewOut:
@@ -409,13 +299,9 @@ class InterviewService:
 
     async def upcoming(self, *, limit: int = 50) -> list[UpcomingInterviewOut]:
         """Confirmed interviews from now onward, soonest first."""
-        rows = (
-            await self.db.execute(
-                self._confirmed_interviews_query()
-                .where(InterviewSlot.starts_at >= datetime.now(UTC))
-                .limit(limit)
-            )
-        ).all()
+        rows = await self.interviews.upcoming_confirmed(
+            after=datetime.now(UTC), limit=limit
+        )
         return [self._to_scheduled(r) for r in rows]
 
     async def schedule(
@@ -423,12 +309,5 @@ class InterviewService:
     ) -> list[UpcomingInterviewOut]:
         """Confirmed interviews starting within `[start, end)` — the schedule
         calendar's month / week / day windows."""
-        rows = (
-            await self.db.execute(
-                self._confirmed_interviews_query().where(
-                    InterviewSlot.starts_at >= start,
-                    InterviewSlot.starts_at < end,
-                )
-            )
-        ).all()
+        rows = await self.interviews.confirmed_within(start=start, end=end)
         return [self._to_scheduled(r) for r in rows]

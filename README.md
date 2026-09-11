@@ -41,11 +41,15 @@ on the cp1252 console codec).
 
 ```bash
 uv run pytest            # unit tests — no containers required
+uv run pytest tests/integration  # needs a real Postgres (see conftest.py) — auto-skips if unreachable
 ```
 
 The unit suite mocks repositories and never touches Postgres/MinIO/Redis. It
-does read configuration, so `.env` must exist. There is no integration suite
-yet — see [docs/maintainability-review.md](docs/maintainability-review.md) F06.
+does read configuration, so `.env` must exist. `tests/integration/` runs
+against a real, throwaway `<db>_test` database (dropped/recreated per session,
+migrated via Alembic) — for the races/constraints/N+1 checks a mocked
+repository can't cover; see
+[docs/maintainability-review.md](docs/maintainability-review.md) F06.
 
 ## Migrations
 
@@ -72,6 +76,21 @@ uv run python -m app.scripts.disqualify_overdue_applications
 ```
 
 See [docs/decisions/D06-scheduler-ownership.md](docs/decisions/D06-scheduler-ownership.md).
+
+## Background jobs (arq)
+
+`POST /applications/export/async` (review F09/F26) hands a large evaluation-pack
+export to an [arq](https://arq-docs.helpmanual.io/) worker instead of building
+it inline — for job posts too big for the synchronous `GET /applications/export`
+route. Run the worker as its own process (needs the same `.env` as the API,
+including `REDIS_URL`):
+
+```bash
+uv run arq app.workers.evaluation_export.WorkerSettings
+```
+
+Poll `GET /applications/export-jobs/{id}` for status, then
+`GET /applications/export-jobs/{id}/download` once it's `done`.
 
 ## Lint / format
 

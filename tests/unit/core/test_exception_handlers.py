@@ -78,4 +78,8 @@ def test_bad_request_maps_to_400():
 def test_unhandled_exception_maps_to_generic_500():
     resp = client.get("/boom")
     assert resp.status_code == 500
-    assert resp.json() == {"detail": "Internal server error"}
+    body = resp.json()
+    assert body["detail"] == "Internal server error"
+    # request_id is None here because this throwaway app has no request-id
+    # middleware installed (unlike the real app — see app/core/request_id.py).
+    assert "request_id" in body

@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Select, func, or_, select
+from sqlalchemy import update as sa_update
 
 from app.core.repository import BaseRepository
 from app.domains.applications import entities
@@ -44,6 +45,24 @@ class ApplicationRepository(
         if obj is None:
             return
         obj.status = status
+
+    async def compare_and_set_status(
+        self, application_id: uuid.UUID, *, expected: str, new: str
+    ) -> bool:
+        """`UPDATE … SET status = :new WHERE id = :id AND status = :expected`.
+        Returns whether a row changed — False means another transaction moved
+        the application out of `expected` first (review F02). The caller must
+        commit; the row is locked for the rest of this transaction on success.
+        """
+        result = await self.db.execute(
+            sa_update(ApplicationModel)
+            .where(
+                ApplicationModel.id == application_id,
+                ApplicationModel.status == expected,
+            )
+            .values(status=new)
+        )
+        return (result.rowcount or 0) == 1
 
     async def set_assessment_deadline(
         self, application_id: uuid.UUID, new_deadline
@@ -88,16 +107,25 @@ class ApplicationRepository(
             for row in result.scalars().all()
         ]
 
-    async def list_overdue_applied(self, now: datetime) -> list[entities.Application]:
+    async def list_overdue_applied(
+        self, now: datetime, *, limit: int | None = None
+    ) -> list[entities.Application]:
         """Applications still `applied` whose assessment_deadline has passed
-        — candidates for the disqualification sweep."""
-        result = await self.db.execute(
-            select(ApplicationModel).where(
+        — candidates for the disqualification sweep. `limit` lets the sweep
+        process in bounded batches instead of loading an unbounded backlog
+        into memory in one go (review F16)."""
+        stmt = (
+            select(ApplicationModel)
+            .where(
                 ApplicationModel.status == ApplicationStatus.APPLIED.value,
                 ApplicationModel.assessment_deadline.is_not(None),
                 ApplicationModel.assessment_deadline < now,
             )
+            .order_by(ApplicationModel.assessment_deadline)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self.db.execute(stmt)
         return [await self._to_entity(obj) for obj in result.scalars().all()]
 
     async def status_counts(

@@ -52,6 +52,14 @@ class AssessmentAttempt(Base):
     # application layer instead (AssessmentService dispatches by this column).
     template_type: Mapped[str] = mapped_column(String(20), nullable=False)
     template_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Frozen copy of the template (title/instructions/timer/questions) as it
+    # read when this attempt was created — reads use this instead of the live
+    # template so a later HR edit can't change historical meaning (review F04,
+    # docs/decisions/D03). Nullable for attempts that predate this column; the
+    # service falls back to a live fetch for those.
+    template_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=AttemptStatus.NOT_STARTED.value
     )

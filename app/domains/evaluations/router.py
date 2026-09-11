@@ -1,13 +1,18 @@
 import re
 import uuid
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi import status as status_codes
+from fastapi.concurrency import run_in_threadpool
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.job_queue import get_arq_pool
+from app.core.storage import ObjectNotFoundError, get_object
 from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.exceptions import ResumeUnavailableError
@@ -16,7 +21,12 @@ from app.domains.assessments.attempts.dependencies import get_assessment_service
 from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
-from app.domains.evaluations.dependencies import get_evaluation_service
+from app.domains.evaluations.dependencies import (
+    get_evaluation_service,
+    get_export_job_service,
+)
+from app.domains.evaluations.exceptions import EvaluationExportJobNotFoundError
+from app.domains.evaluations.export_jobs import ExportJobService
 from app.domains.evaluations.pack import (
     EVALUATION_PACK_MAX,
     EVALUATION_PACK_MAX_BYTES,
@@ -24,6 +34,7 @@ from app.domains.evaluations.pack import (
 )
 from app.domains.evaluations.schemas import (
     ApplicationEvaluationOut,
+    EvaluationExportJobOut,
     EvaluationImportIn,
     EvaluationImportResultOut,
     JobEvaluationRowOut,
@@ -60,7 +71,8 @@ async def export_evaluation_pack(
 ) -> Response:
     """ZIP for external AI evaluation: job spec + rubric + every applicant's
     résumé and assessment answers. Bounded by applicant count and total bytes —
-    narrow with `?status=` when a job post is over the cap."""
+    over either cap, use `POST /applications/export/async` instead, or narrow
+    with `?status=`."""
     job = await job_post_service.get(job_post_id)
     query = await service.list_for_review(
         job_post_id=job_post_id,
@@ -74,8 +86,9 @@ async def export_evaluation_pack(
         raise HTTPException(
             status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=(
-                f"More than {EVALUATION_PACK_MAX} applicants match. Narrow with "
-                "?status=applied (repeatable) or split the export."
+                f"More than {EVALUATION_PACK_MAX} applicants match. Use "
+                "POST /applications/export/async for a job post this size, or "
+                "narrow with ?status=applied (repeatable)."
             ),
         )
 
@@ -93,7 +106,8 @@ async def export_evaluation_pack(
                     detail=(
                         "The résumés for this set exceed the "
                         f"{EVALUATION_PACK_MAX_BYTES // (1024 * 1024)} MiB export "
-                        "limit. Narrow with ?status=."
+                        "limit. Use POST /applications/export/async instead, or "
+                        "narrow with ?status=."
                     ),
                 )
             resume = (data, filename)
@@ -110,6 +124,74 @@ async def export_evaluation_pack(
         headers={
             "Content-Disposition": (
                 f'attachment; filename="{slug}-evaluation-pack.zip"'
+            )
+        },
+    )
+
+
+@router.post(
+    "/export/async",
+    response_model=EvaluationExportJobOut,
+    status_code=status_codes.HTTP_202_ACCEPTED,
+)
+async def export_evaluation_pack_async(
+    job_post_id: uuid.UUID,
+    status: list[ApplicationStatus] | None = Query(
+        None, description="Restrict the pack to these pipeline statuses"
+    ),
+    current_user: auth_entities.User = Depends(get_current_user),
+    job_post_service: JobPostService = Depends(get_job_post_service),
+    export_jobs: ExportJobService = Depends(get_export_job_service),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+) -> EvaluationExportJobOut:
+    """For a job post too big for the synchronous `/export` route: enqueues the
+    pack build on an arq worker (review F09/F26) and returns immediately. Poll
+    `GET /applications/export-jobs/{id}` for status, then
+    `GET /applications/export-jobs/{id}/download`."""
+    await job_post_service.get(job_post_id)  # 404s early if the job post is gone
+    job = await export_jobs.enqueue(
+        job_post_id=job_post_id,
+        requested_by_user_id=current_user.id,
+        status_filter=[s.value for s in status] if status else None,
+        arq_pool=arq_pool,
+    )
+    return EvaluationExportJobOut.model_validate(job)
+
+
+@router.get("/export-jobs/{job_id}", response_model=EvaluationExportJobOut)
+async def get_evaluation_export_job(
+    job_id: uuid.UUID,
+    export_jobs: ExportJobService = Depends(get_export_job_service),
+) -> EvaluationExportJobOut:
+    job = await export_jobs.get(job_id)
+    return EvaluationExportJobOut.model_validate(job)
+
+
+@router.get("/export-jobs/{job_id}/download")
+async def download_evaluation_export(
+    job_id: uuid.UUID,
+    export_jobs: ExportJobService = Depends(get_export_job_service),
+) -> Response:
+    job = await export_jobs.get(job_id)
+    if job.status != "done" or not job.result_object_key:
+        raise HTTPException(
+            status_code=status_codes.HTTP_409_CONFLICT,
+            detail=f"Export job '{job_id}' is not ready (status: {job.status})",
+        )
+    try:
+        data, _content_type = await run_in_threadpool(
+            get_object, settings.minio_bucket, job.result_object_key
+        )
+    except ObjectNotFoundError as exc:
+        raise EvaluationExportJobNotFoundError(
+            f"The result for export job '{job_id}' is no longer available"
+        ) from exc
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="evaluation-pack-{job_id}.zip"'
             )
         },
     )

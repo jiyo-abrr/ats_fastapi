@@ -235,8 +235,10 @@ class TestWithdraw:
 
         await service.withdraw(application.id, user)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.WITHDRAWN
+        applications.compare_and_set_status.assert_called_once_with(
+            application.id,
+            expected=ApplicationStatus.APPLIED.value,
+            new=ApplicationStatus.WITHDRAWN.value,
         )
         uow.commit.assert_called_once()
 
@@ -270,8 +272,10 @@ class TestUpdateStatus:
 
         await service.update_status(application.id, ApplicationStatus.PRESCREENING)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.PRESCREENING
+        applications.compare_and_set_status.assert_called_once()
+        assert (
+            applications.compare_and_set_status.call_args.kwargs["new"]
+            == ApplicationStatus.PRESCREENING.value
         )
         uow.commit.assert_called_once()
 
@@ -282,8 +286,10 @@ class TestUpdateStatus:
 
         await service.update_status(application.id, ApplicationStatus.DENIED)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.DENIED
+        applications.compare_and_set_status.assert_called_once()
+        assert (
+            applications.compare_and_set_status.call_args.kwargs["new"]
+            == ApplicationStatus.DENIED.value
         )
 
     async def test_allows_prescreening_to_interview(self):
@@ -293,8 +299,10 @@ class TestUpdateStatus:
 
         await service.update_status(application.id, ApplicationStatus.INTERVIEW)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.INTERVIEW
+        applications.compare_and_set_status.assert_called_once()
+        assert (
+            applications.compare_and_set_status.call_args.kwargs["new"]
+            == ApplicationStatus.INTERVIEW.value
         )
 
     async def test_allows_interview_to_success_or_failed(self):
@@ -304,8 +312,10 @@ class TestUpdateStatus:
 
         await service.update_status(application.id, ApplicationStatus.SUCCESS)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.SUCCESS
+        applications.compare_and_set_status.assert_called_once()
+        assert (
+            applications.compare_and_set_status.call_args.kwargs["new"]
+            == ApplicationStatus.SUCCESS.value
         )
 
     async def test_rejects_backwards_transition(self):
@@ -389,8 +399,10 @@ class TestExtendAssessmentDeadline:
             current_user=make_user(role="hr"),
         )
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.APPLIED
+        applications.compare_and_set_status.assert_called_once_with(
+            application.id,
+            expected=ApplicationStatus.DISQUALIFIED.value,
+            new=ApplicationStatus.APPLIED.value,
         )
 
     async def test_rejects_non_positive_extend_by_days(self):
@@ -465,8 +477,10 @@ class TestDisqualify:
 
         await service.disqualify(application.id)
 
-        applications.update_status.assert_called_once_with(
-            application.id, ApplicationStatus.DISQUALIFIED
+        applications.compare_and_set_status.assert_called_once_with(
+            application.id,
+            expected=ApplicationStatus.APPLIED.value,
+            new=ApplicationStatus.DISQUALIFIED.value,
         )
         uow.commit.assert_called_once()
 
@@ -477,7 +491,7 @@ class TestDisqualify:
 
         await service.disqualify(application.id)
 
-        applications.update_status.assert_not_called()
+        applications.compare_and_set_status.assert_not_called()
         uow.commit.assert_not_called()
 
     async def test_noop_if_application_missing(self):
@@ -486,7 +500,7 @@ class TestDisqualify:
 
         await service.disqualify(uuid.uuid4())
 
-        applications.update_status.assert_not_called()
+        applications.compare_and_set_status.assert_not_called()
 
 
 class TestStats:

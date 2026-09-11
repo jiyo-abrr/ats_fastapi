@@ -66,21 +66,30 @@ class AssessmentService:
         self.applications = applications
         self.uow = uow
 
-    async def _get_template(self, template_type: str, template_id: uuid.UUID):
-        """Dispatches to whichever of the 3 template repositories owns this
-        attempt's template — template_id alone is ambiguous without knowing
-        which of the 3 independent domains it belongs to. May return None if
-        the template was deleted after the attempt was created; callers that
-        need it to exist use `_require_template`."""
-        repo = self._template_repos[TemplateType(template_type)]
-        return await repo.get_by_id(template_id)
+    async def _get_template(self, attempt):
+        """The attempt's template, preferring its frozen `template_snapshot`
+        (taken at issuance — review F04/D03) over a live fetch, so an edit to
+        the template after issuance can't change what an in-progress or
+        completed attempt looked like. Only attempts created before the
+        snapshot column existed fall back to the live template. `attempt` may
+        be an entity or a raw ORM row (`summaries_for_applications` passes the
+        latter) — both expose `template_type`/`template_id`/`template_snapshot`.
+        May return None if there's no snapshot and the live template was
+        deleted; callers that need it to exist use `_require_template`."""
+        snapshot = attempt.template_snapshot
+        if snapshot is not None:
+            if isinstance(snapshot, entities.TemplateSnapshot):
+                return snapshot
+            return entities.TemplateSnapshot.from_json(snapshot)
+        repo = self._template_repos[TemplateType(attempt.template_type)]
+        return await repo.get_by_id(attempt.template_id)
 
-    async def _require_template(self, template_type: str, template_id: uuid.UUID):
-        template = await self._get_template(template_type, template_id)
+    async def _require_template(self, attempt):
+        template = await self._get_template(attempt)
         if template is None:
             raise MissingAssessmentTemplateError(
-                f"The template for this attempt (type '{template_type}') no "
-                "longer exists — it was removed after the attempt was created"
+                f"The template for this attempt (type '{attempt.template_type}') "
+                "no longer exists — it was removed after the attempt was created"
             )
         return template
 
@@ -90,7 +99,7 @@ class AssessmentService:
         """Populate `total_questions` from the attempt's template — called on
         every attempt returned to a router (list + submit + reopen), so the
         frontend gets progress without a gated template fetch."""
-        template = await self._get_template(attempt.template_type, attempt.template_id)
+        template = await self._get_template(attempt)
         attempt.total_questions = len(template.questions) if template else 0
         return attempt
 
@@ -115,6 +124,7 @@ class AssessmentService:
         for template_type, template_id in attached.items():
             if template_id is None:
                 continue
+            template = await self._template_repos[template_type].get_by_id(template_id)
             await self.attempts.add(
                 entities.AssessmentAttempt(
                     id=uuid.uuid4(),
@@ -122,6 +132,11 @@ class AssessmentService:
                     template_type=template_type,
                     template_id=template_id,
                     status=AttemptStatus.NOT_STARTED,
+                    template_snapshot=(
+                        entities.TemplateSnapshot.from_template(template)
+                        if template is not None
+                        else None
+                    ),
                 )
             )
         if commit:
@@ -195,7 +210,15 @@ class AssessmentService:
                 minutes=template.time_limit_minutes
             )
             if datetime.now(UTC) > deadline:
-                await self.attempts.expire_attempt(attempt.id)
+                if not await self.attempts.expire_attempt(attempt.id):
+                    # Someone else already moved it out of in_progress in the
+                    # meantime (e.g. the applicant's own submit_answer just
+                    # completed it) — re-check against the real current state
+                    # instead of wrongly claiming "expired" over a completion
+                    # that actually landed first (review F02).
+                    await self.uow.commit()
+                    fresh = await self.attempts.get_by_id(attempt.id)
+                    return await self._check_and_apply_layer2_expiry(fresh, template)
                 await self.uow.commit()
                 raise AssessmentAttemptExpiredError(
                     f"Assessment attempt '{attempt.id}' has expired"
@@ -227,9 +250,7 @@ class AssessmentService:
     ) -> entities.AssessmentAnswer:
         attempt = await self._require_owned_attempt(attempt_id, current_user)
         await self._require_answerable_parent(attempt)
-        template = await self._require_template(
-            attempt.template_type, attempt.template_id
-        )
+        template = await self._require_template(attempt)
         now = datetime.now(UTC)
 
         if attempt.status == AttemptStatus.NOT_STARTED:
@@ -272,9 +293,7 @@ class AssessmentService:
     ) -> entities.AssessmentAttempt:
         attempt = await self._require_owned_attempt(attempt_id, current_user)
         await self._require_answerable_parent(attempt)
-        template = await self._require_template(
-            attempt.template_type, attempt.template_id
-        )
+        template = await self._require_template(attempt)
         now = datetime.now(UTC)
         attempt = await self._check_and_apply_layer2_expiry(attempt, template)
 
@@ -367,6 +386,12 @@ class AssessmentService:
             await self.attempts.get_by_id(attempt_id)
         )
 
+    # Bounds one sweep call's work (review F16). in_progress attempts that get
+    # expired/completed leave the scanned set, so a backlog bigger than this
+    # drains over successive ticks rather than blowing up one tick's memory
+    # and runtime.
+    _SWEEP_BATCH_SIZE = 2000
+
     async def expire_overdue_attempts(self) -> list[uuid.UUID]:
         """Layer 2 sweep — called by the scheduled job, never a router.
 
@@ -378,17 +403,20 @@ class AssessmentService:
         test they actually finished (review F22).
         """
         now = datetime.now(UTC)
-        overdue = await self.attempts.find_overdue_in_progress_attempts(now)
+        overdue = await self.attempts.find_overdue_in_progress_attempts(
+            now, limit=self._SWEEP_BATCH_SIZE
+        )
         expired_ids = {attempt.id for attempt in overdue}
         for attempt in overdue:
             await self.attempts.expire_attempt(attempt.id)
 
-        for attempt in await self.attempts.list_in_progress_attempts():
+        scanned = await self.attempts.list_in_progress_attempts(
+            limit=self._SWEEP_BATCH_SIZE
+        )
+        for attempt in scanned:
             if attempt.id in expired_ids:
                 continue
-            template = await self._get_template(
-                attempt.template_type, attempt.template_id
-            )
+            template = await self._get_template(attempt)
             if template is None:
                 continue
             answers = await self.attempts.list_live_answers(attempt.id)
@@ -427,10 +455,10 @@ class AssessmentService:
         answered = await self.attempts.answered_counts([a.id for a in attempts])
         total_cache: dict[tuple[str, str], int] = {}
 
-        async def _total_questions(template_type: str, template_id) -> int:
-            key = (template_type, str(template_id))
+        async def _total_questions(attempt) -> int:
+            key = (attempt.template_type, str(attempt.template_id))
             if key not in total_cache:
-                template = await self._get_template(template_type, template_id)
+                template = await self._get_template(attempt)
                 total_cache[key] = len(template.questions) if template else 0
             return total_cache[key]
 
@@ -441,9 +469,7 @@ class AssessmentService:
                     "template_type": a.template_type,
                     "status": a.status,
                     "answered_count": answered.get(a.id, 0),
-                    "total_questions": await _total_questions(
-                        a.template_type, a.template_id
-                    ),
+                    "total_questions": await _total_questions(a),
                     "started_at": a.started_at,
                     "completed_at": a.completed_at,
                 }
@@ -460,9 +486,7 @@ class AssessmentService:
         attempts = await self.attempts.list_for_application(application_id)
         reviews: list[dict] = []
         for attempt in attempts:
-            template = await self._get_template(
-                attempt.template_type, attempt.template_id
-            )
+            template = await self._get_template(attempt)
             answers_by_question = {a.question_id: a for a in attempt.answers}
             questions = list(template.questions) if template else []
             questions.sort(key=lambda q: q.order_index)
@@ -510,9 +534,7 @@ class AssessmentService:
         applies layer-2 expiry (that stays a side effect of start/submit);
         surfaces only the current question, matching the sequential rule."""
         attempt = await self._require_owned_attempt(attempt_id, current_user)
-        template = await self._require_template(
-            attempt.template_type, attempt.template_id
-        )
+        template = await self._require_template(attempt)
         now = datetime.now(UTC)
         answers = await self.attempts.list_live_answers(attempt_id)
         answers_by_question = {a.question_id: a for a in answers}

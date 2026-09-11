@@ -29,6 +29,8 @@ from app.domains.assessments.technical_assessment_templates.service import (
     TechnicalAssessmentTemplateService,
 )
 from app.domains.rbac.dependencies import require_permission
+from app.use_cases.delete_assessment_template import DeleteAssessmentTemplate
+from app.use_cases.dependencies import get_delete_technical_assessment_template
 
 # Unlike positions/tags/company_addresses/job_posts, reads here are also
 # gated — templates are internal HR-authoring content, not a public listing.
@@ -90,11 +92,12 @@ async def update_technical_assessment_template(
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_technical_assessment_template(
     template_id: uuid.UUID,
-    service: TechnicalAssessmentTemplateService = Depends(
-        get_technical_assessment_template_service
+    delete_template: DeleteAssessmentTemplate = Depends(
+        get_delete_technical_assessment_template
     ),
 ) -> None:
-    await service.delete(template_id)
+    # 409 if any attempt references it (no DB FK across that boundary — F04).
+    await delete_template.execute(template_id)
 
 
 @router.post(
