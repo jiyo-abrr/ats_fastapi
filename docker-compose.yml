@@ -29,7 +29,19 @@ services:
     volumes:
       - redis_data:/data
 
+  # Job-queue broker (review F09/F26 migration — see
+  # docs/plans/rabbitmq-airflow-migration.md). Management UI at
+  # http://localhost:15672 (guest/guest, dev-only default creds).
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
 volumes:
   postgres_data:
   minio_data:
   redis_data:
+  rabbitmq_data:

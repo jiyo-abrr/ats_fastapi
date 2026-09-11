@@ -38,9 +38,12 @@ _BATCH_SIZE = 200
 _MAX_BATCHES_PER_TICK = 25  # hard cap: at most 5,000 applications per tick
 
 
-async def run() -> None:
+async def run() -> dict[str, int]:
     """The sweep itself, with no lock — the scheduler composes this under one
-    shared advisory lock together with the expiry sweep."""
+    shared advisory lock together with the expiry sweep. Returns
+    `{"checked": ..., "disqualified": ...}` (used by `app.cli`'s `--json`
+    output; the standalone `__main__` entry point below still just prints
+    and discards it)."""
     async with AsyncSessionLocal() as db:
         uow = UnitOfWork(db)
         applications = ApplicationRepository(db)
@@ -87,15 +90,17 @@ async def run() -> None:
             f"Checked {checked} overdue application(s), "
             f"disqualified {disqualified_count}"
         )
+        return {"checked": checked, "disqualified": disqualified_count}
 
 
-async def main() -> None:
+async def main() -> dict[str, int] | None:
     """CLI / task-runner entry point — takes the shared sweep lock so a manual
-    run can't collide with a scheduler tick or the other script."""
+    run can't collide with a scheduler tick or the other script. Returns
+    `None` if another run already held the lock (skipped this tick)."""
     async with AsyncSessionLocal() as lock_db, sweep_advisory_lock(lock_db) as acquired:
         if not acquired:
-            return
-        await run()
+            return None
+        return await run()
 
 
 if __name__ == "__main__":

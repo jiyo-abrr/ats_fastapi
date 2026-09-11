@@ -11,7 +11,7 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.database import async_engine, engine
 from app.core.exception_handlers import register_exception_handlers
-from app.core.job_queue import close_arq_pool
+from app.core.queue import broker as rabbitmq_broker
 from app.core.rate_limit import redis_client
 from app.core.request_id import request_id_middleware
 from app.core.scheduler import shutdown_scheduler, start_scheduler
@@ -21,12 +21,13 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await rabbitmq_broker.start()
     start_scheduler()
     yield
     shutdown_scheduler()
     # Close the long-lived clients we opened at import (review F21).
     await redis_client.aclose()
-    await close_arq_pool()
+    await rabbitmq_broker.stop()
     await async_engine.dispose()
     engine.dispose()
 
@@ -60,7 +61,7 @@ def health() -> dict[str, str]:
 
 @app.get("/health/ready")
 async def health_ready() -> JSONResponse:
-    """Readiness — can we serve traffic? Pings Postgres and Redis."""
+    """Readiness — can we serve traffic? Pings Postgres, Redis, and RabbitMQ."""
     checks: dict[str, str] = {}
     try:
         async with async_engine.connect() as conn:
@@ -73,6 +74,10 @@ async def health_ready() -> JSONResponse:
         checks["redis"] = "ok"
     except Exception:  # noqa: BLE001
         checks["redis"] = "error"
+    try:
+        checks["rabbitmq"] = "ok" if await rabbitmq_broker.ping(timeout=5) else "error"
+    except Exception:  # noqa: BLE001
+        checks["rabbitmq"] = "error"
 
     ok = all(v == "ok" for v in checks.values())
     return JSONResponse(

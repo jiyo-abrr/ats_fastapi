@@ -18,6 +18,12 @@ class Settings(BaseSettings):
 
     redis_url: str
 
+    # Job-queue broker (review F09/F26 migration — see
+    # docs/plans/rabbitmq-airflow-migration.md). Default matches
+    # docker-compose.yml's rabbitmq service with its dev-only guest/guest
+    # creds; override per environment.
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
+
     # The in-process APScheduler sweep (expire attempts -> disqualify
     # applications). With more than one web worker/replica this MUST be true on
     # at most one of them, or every process runs the same sweep concurrently.

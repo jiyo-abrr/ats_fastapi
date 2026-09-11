@@ -37,6 +37,14 @@ jobs:
       redis:
         image: redis:7
         ports: ["6379:6379"]
+      rabbitmq:
+        image: rabbitmq:4
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql+psycopg://ats:ats@localhost:5432/ats
       JWT_SECRET_KEY: ci-not-a-real-secret-ci-not-a-real-secret
@@ -45,6 +53,7 @@ jobs:
       MINIO_SECRET_KEY: ci
       MINIO_BUCKET: resumes
       REDIS_URL: redis://localhost:6379/0
+      RABBITMQ_URL: amqp://guest:guest@localhost:5672/
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

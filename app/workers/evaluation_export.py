@@ -1,14 +1,16 @@
-"""arq worker for background evaluation-pack exports (review F09/F26).
+"""FastStream (RabbitMQ) worker for background evaluation-pack exports
+(review F09/F26; migrated off arq/Redis — see
+docs/plans/rabbitmq-airflow-migration.md).
 
 Run it as its own process, separate from the FastAPI app:
 
-    uv run arq app.workers.evaluation_export.WorkerSettings
+    uv run faststream run app.workers.evaluation_export:app
 
 The sync `GET /applications/export` route (see `evaluations/router.py`) stays
 as-is for the common case (<= EVALUATION_PACK_MAX applicants, small résumés);
 `POST /applications/export/async` is for job posts too big for that — it
-enqueues `build_evaluation_export` here and returns immediately with a job id
-to poll.
+publishes to `EVALUATION_EXPORT_QUEUE` (`app/core/queue.py`) and returns
+immediately with a job id to poll.
 
 This module intentionally does NOT go through `AssessmentService.get_resume`'s
 owner-or-manage_applications check: the job was already authorized once, at
@@ -22,12 +24,12 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
-from arq.connections import RedisSettings
+from faststream import AckPolicy, FastStream
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.core.job_queue import redis_settings
+from app.core.queue import EVALUATION_EXPORT_DLQ, EVALUATION_EXPORT_QUEUE, broker
 from app.core.storage import ObjectNotFoundError, get_object, upload_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.models import Application as ApplicationModel
@@ -55,8 +57,21 @@ logger = logging.getLogger(__name__)
 _ASYNC_EXPORT_MAX_APPLICANTS = 5000
 _EVALUATION_PACKS_PREFIX = "evaluation_packs/"
 
+app = FastStream(broker)
 
-async def build_evaluation_export(ctx: dict, job_id: str) -> None:
+
+# One attempt: on an unhandled exception, `AckPolicy.REJECT_ON_ERROR` rejects
+# the message without requeuing it, and RabbitMQ routes it straight to
+# EVALUATION_EXPORT_DLQ via the queue's x-dead-letter-* arguments (see
+# app/core/queue.py) — new visibility arq never gave us (a failed arq job
+# just retried silently up to its own default max_tries, then vanished).
+# faststream==0.7.5's subscriber has no declarative "retry N times" option
+# (that's from an older API generation) — only a binary ack/nack/reject
+# policy. If automatic retries are wanted later, they'd need to be
+# hand-rolled (e.g. a retry count in a message header, re-published by this
+# same handler), not assumed from the decorator.
+@broker.subscriber(EVALUATION_EXPORT_QUEUE, ack_policy=AckPolicy.REJECT_ON_ERROR)
+async def build_evaluation_export(job_id: str) -> None:
     job_uuid = uuid.UUID(job_id)
     async with AsyncSessionLocal() as db:
         uow = UnitOfWork(db)
@@ -71,7 +86,7 @@ async def build_evaluation_export(ctx: dict, job_id: str) -> None:
 
         try:
             result_key = await _run_export(db, job)
-        except Exception as exc:  # noqa: BLE001 — recorded on the job row, re-raised for arq's own retry/log
+        except Exception as exc:  # noqa: BLE001 — recorded on the job row, re-raised so FastStream retries/DLQs it
             logger.exception("evaluation export job %s failed", job_id)
             await jobs.mark_failed(
                 job_uuid, error_message=str(exc), completed_at=datetime.now(UTC)
@@ -83,6 +98,17 @@ async def build_evaluation_export(ctx: dict, job_id: str) -> None:
                 job_uuid, result_object_key=result_key, completed_at=datetime.now(UTC)
             )
             await uow.commit()
+
+
+@broker.subscriber(EVALUATION_EXPORT_DLQ)
+async def log_dead_lettered_export(job_id: str) -> None:
+    """Pure visibility, not a retry path — a job that lands here already has
+    `status="failed"` + `error_message` on its `EvaluationExportJob` row
+    (set by `build_evaluation_export` on its final attempt, before
+    RabbitMQ dead-letters it), so there's nothing left to *do* with the
+    message; this just makes sure it also shows up in the worker's own log
+    stream, since nothing else watches this queue."""
+    logger.error("evaluation export job %s dead-lettered after retries", job_id)
 
 
 async def _run_export(db, job) -> str:
@@ -139,8 +165,3 @@ async def _run_export(db, job) -> str:
         upload_object, settings.minio_bucket, object_key, payload, "application/zip"
     )
     return object_key
-
-
-class WorkerSettings:
-    functions = [build_evaluation_export]
-    redis_settings: RedisSettings = redis_settings()

@@ -18,7 +18,8 @@ from app.core.database import Base
 
 class EvaluationExportJob(Base):
     """A background evaluation-pack export (review F09/F26) — the pack is
-    built by an arq worker (`app/workers/evaluation_export.py`), not inline in
+    built by a FastStream/RabbitMQ worker
+    (`app/workers/evaluation_export.py`), not inline in
     the request, so a job post with more applicants/résumés than
     `EVALUATION_PACK_MAX`/`EVALUATION_PACK_MAX_BYTES` still gets an export,
     just an asynchronous one. `result_object_key` points into the same MinIO

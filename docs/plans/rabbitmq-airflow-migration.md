@@ -1,11 +1,113 @@
 # Migration plan — RabbitMQ (queueing) + Airflow (orchestration)
 
-Status: **decisions locked (section 2), implementation not started**.
-Companion to
+Status: **Phases 0–3 code-complete and staged; cutover not flipped — see
+"What's remaining" below.** Companion to
 [docs/decisions/D06-scheduler-ownership.md](../decisions/D06-scheduler-ownership.md)
 (which already commits to "delete `app/core/scheduler.py`, the two sweep
 scripts become two Airflow tasks" as the known end state) and
 [docs/architecture.md](../architecture.md).
+
+## What's remaining
+
+The disk-space/Docker-corruption problem that blocked verification resolved
+itself (host disk recovered from ~250 MiB to ~2.9 GiB free on its own;
+`docker builder prune -f` reclaimed a further ~20 GiB of stale build cache
+from unrelated projects on this machine, safe/regenerable, not touching any
+project's data or volumes). With Docker healthy again, the real
+verifications below all ran — **for real, against live services, not
+mocked** — with one genuine bug found and fixed along the way.
+
+**Done, verified for real (not just "should work"):**
+1. **RabbitMQ round-trip against the actual app code** (Phase 2). Started
+   `uv run faststream run app.workers.evaluation_export:app` for real,
+   published a job through `app/core/queue.py` exactly as
+   `ExportJobService.enqueue` does, and watched the full pipeline complete:
+   consumed → `AssessmentService`/`JobPostRepository` built a real
+   evaluation pack → uploaded to MinIO → `EvaluationExportJob` row reached
+   `status="done"` with the correct `result_object_key` → read the object
+   back out of MinIO and confirmed it's a well-formed ZIP with the expected
+   files. Also proved the "job row not found" branch acks cleanly instead
+   of erroring.
+2. **Airflow actually starting, and a real bug found + fixed.**
+   `airflow-init` initially failed with `ModuleNotFoundError: No module
+   named 'airflow'` — root cause: the service's `entrypoint: /bin/bash`
+   override (a commonly copy-pasted pattern) **skips the official image's
+   own `/entrypoint` script**, which is what makes
+   `_PIP_ADDITIONAL_REQUIREMENTS` actually resolve on `PYTHONPATH`
+   afterward. Fixed in `docker-compose.airflow.yml`: keep the image's
+   default `ENTRYPOINT` and pass `bash -c "..."` as the *command* instead —
+   confirmed working (`airflow db migrate` ran and actually created the
+   metadata DB's tables) against a real `apache/airflow:3.2.0-python3.12`
+   pull. Documented in the compose file itself so nobody reintroduces it.
+   One smaller, separate issue found and **not** fixed yet: `airflow users
+   create` throws `AttributeError: 'AirflowSecurityManagerV2' object has no
+   attribute 'find_role'` — an Airflow-3.x auth-manager compatibility issue
+   with the FAB `users create` CLI command, unrelated to this migration's
+   own code (harmless today — the compose command already wraps it in
+   `|| true`, so `airflow-init` still succeeds overall; it just means no
+   admin user gets created automatically yet). Needs
+   `AIRFLOW__CORE__AUTH_MANAGER` set explicitly or a different
+   user-bootstrap approach — tracked, not blocking.
+3. **`airflow/dags/assessment_sweep_dag.py` imports cleanly and the
+   dependency graph is exactly as designed**, checked directly inside the
+   real container: `dag.dag_id == "assessment_sweep"`, all 3 tasks present
+   (`expire_attempts`, `disqualify_applications`, `purge_expired_tokens`),
+   `expire_attempts.downstream_task_ids == {"disqualify_applications"}`,
+   and `purge_expired_tokens` correctly has no dependency edges either way.
+4. **The scheduler and dag-processor actually run, not just parse.**
+   Brought up `airflow-scheduler` + `airflow-dag-processor` for real: the
+   dag-processor found the file, parsed it with **0 errors**, wrote the DAG
+   to the metadata DB, and computed the correct next scheduled run from the
+   `*/15 * * * *` cron. Both containers stayed up and stable (checked twice,
+   15s apart) — no crash loop. Stack torn down afterward
+   (`docker compose -f docker-compose.airflow.yml down`) rather than left
+   running.
+
+**Still remaining — genuinely different work now, not blocked on Docker:**
+5. **The Phase 4 `dag_bag` CI test** — the manual verification above proved
+   the DAG *can* be checked this way; wiring it into an actual CI job (its
+   own Airflow dependency group, separate from this repo's — decision
+   2b/2d) is still to do.
+6. **Phase 5's staged parallel-run verification** — run the Airflow DAG
+   *and* `SCHEDULER_ENABLED` side by side for one full sweep cycle in a
+   non-prod environment, diff the *business outcomes* (same applications
+   disqualified, same attempts expired). What's proven so far is that the
+   DAG mechanically works (parses, schedules, and — per point 1's pattern —
+   the underlying `ats-cli sweep` commands work standalone); what's **not**
+   proven is a live `SSHOperator` task actually reaching the app host and
+   producing correct results end-to-end, since that needs the real SSH
+   provisioning in point 8 below.
+7. Delete `app/core/scheduler.py`, its `main.py` lifespan calls, and
+   `scheduler_enabled`/`scheduler_interval_minutes` from `Settings` —
+   deliberately still not done; gated on point 6, not on Docker anymore.
+8. `uv remove apscheduler` — same gate as point 7.
+9. Update `docs/decisions/D06-scheduler-ownership.md` with a final
+   "implemented" note — same gate as point 7.
+
+**Not code at all — real deploy-environment setup, whenever this actually
+gets deployed:**
+10. The app-host SSH user/key the plan's `SSHOperator` approach needs
+    (`authorized_keys` `command=`-pinned to `docker compose run --rm app ...`,
+    or equivalent), the matching Airflow `Connection`, and the
+    `ats_app_dir` Airflow `Variable`. All documented as prerequisites in
+    `airflow/dags/assessment_sweep_dag.py`'s own module docstring; none of
+    it is something a coding session can provision. This is what point 6
+    is actually waiting on now — not Docker, not code.
+
+**Done:**
+11. [`docs/decisions/D10-queue-orchestration-technology.md`](../decisions/D10-queue-orchestration-technology.md)
+    — the coherent ADR recording the RabbitMQ/FastStream choice, the
+    `AckPolicy` correction, and the SSH-vs-Docker-socket call for Airflow
+    task invocation.
+
+Everything else — Phases 0–3's actual code (RabbitMQ client library,
+`app/core/queue.py`, the FastStream worker, `app/cli.py`, the DAG file, all
+associated tests, CI service containers, README/CLAUDE.md updates) — is
+done, staged (not committed), and now verified for real: imports clean,
+`ruff check`/`ruff format --check` clean (aside from 3 pre-existing
+unrelated files), full unit suite green, and — as of this session — the
+full integration suite green against a real Postgres too (303 tests, no
+skips) plus the live RabbitMQ/Airflow checks described above.
 
 ## 1. What's moving, and why
 
@@ -159,192 +261,293 @@ negligible extra DAG complexity.
 
 ## 4. Phased plan
 
-### Phase 0 — Spike / compatibility check (before any other work)
-- Confirm FastStream + Airflow's current stable release both support Python
-  3.14 (2d). If either doesn't, resolve per the fallbacks above *before*
-  Phase 1, not discovered mid-migration.
-- Stand up a throwaway RabbitMQ container and Airflow's `docker compose`
-  quickstart locally; confirm both start cleanly on this machine/CI runner
-  before writing any app code against them.
+### Phase 0 — Spike / compatibility check — **done ✅**
+- **FastStream on Python 3.14:** confirmed. PyPI classifiers for
+  `faststream==0.7.5` list 3.10–3.14 explicitly; `uv add "faststream[rabbit]"`
+  resolves and installs cleanly against this repo's 3.14 environment (pulls
+  in `aio-pika==10.0.1`, `aiormq==7.0.0`, `fast-depends==3.0.8`, no conflicts).
+  `app.main` still imports cleanly, and the full suite (297 tests) still
+  passes with the dependency present but unused.
+- **Real round-trip, not just import:** a throwaway `rabbitmq:4-management`
+  container + a `RabbitBroker`/`@broker.subscriber` spike script published
+  and consumed a message end-to-end on this machine — `Received` /
+  `Processed` in the broker log, the handler's payload matched what was
+  published. Container torn down after. This is the strongest form of "does
+  it work here" short of the real Phase 2 implementation.
+- **Airflow on Python 3.14:** supported since Airflow **3.2.0** (per
+  Airflow's own release notes) — but there's a live rough edge as of this
+  writing: [apache/airflow#64954](https://github.com/apache/airflow/issues/64954)
+  reports a numpy-version mismatch between the published 3.14 constraints
+  file and the official Docker image for 3.2.0, breaking custom image builds
+  that freeze requirements from a local dev install (workaround noted there:
+  build against the 3.13 constraints file instead). Two things make this a
+  non-blocker for *this* plan specifically: (1) the `SSHOperator` approach
+  (2b) means Airflow's own Python version never has to match the app's 3.14
+  at all — Airflow can run on whichever Python (3.12/3.13) is most stable
+  for it, completely independent of the app container it SSHes into; (2)
+  even if Airflow itself moves to 3.14 later, re-check that specific issue's
+  status before building any custom Airflow image against 3.14 constraints.
+- `faststream[rabbit]` is left installed (`pyproject.toml`/`uv.lock`
+  updated) rather than added-then-reverted — Phase 2 needs it regardless,
+  and leaving it in now avoids re-doing this exact verification later. Ruff/
+  pytest/alembic all still green with it present. Not yet wired into any
+  app code (`app/core/queue.py` doesn't exist yet — that's Phase 2 step 2).
 
-### Phase 1 — Infrastructure
-- Add a `rabbitmq` service to `docker-compose.yml` (image
-  `rabbitmq:4-management`, so the management UI is available at `:15672`
-  during dev).
-- Add `RABBITMQ_URL` (or `RABBITMQ_HOST`/`PORT`/`USER`/`PASSWORD`/`VHOST`) to
-  `app/core/config.py`'s `Settings` and `.env.example`, following the
-  existing `redis_url`/`minio_*` pattern.
-- Airflow gets its **own** `docker-compose.airflow.yml` (or a dedicated
-  `airflow/` directory with Airflow's official quickstart compose file,
-  trimmed down) — kept separate from the app's `docker-compose.yml` since
-  Airflow is a different lifecycle (its own Postgres, its own containers,
-  optionally not run at all on a laptop doing pure API work). Document both
-  the "just the app" and "app + Airflow" `docker compose` invocations in
-  README.
-- CI (`.github/workflows/ci.yml`): add a `rabbitmq` service container next
-  to the existing `postgres`/`redis` ones, same `--health-cmd` pattern, so
-  the integration suite (Phase 4) can run against a real broker. Airflow DAG
-  validation (Phase 4) can run as its own lightweight CI job that doesn't
-  need the full Airflow stack up (`airflow dags list-import-errors` needs
-  only Airflow installed, not a running scheduler/webserver).
+### Phase 1 — Infrastructure — **done ✅, fully verified**
+- `docker-compose.yml`: added a `rabbitmq` service (`rabbitmq:4-management`,
+  management UI at `:15672`, `guest`/`guest` dev-only creds, its own
+  `rabbitmq_data` volume). Validated with `docker compose config`.
+- `RABBITMQ_URL` added to `app/core/config.py`'s `Settings` (defaults to the
+  compose service above) and `.env.example`, matching the `redis_url`/
+  `minio_*` pattern.
+- `docker-compose.airflow.yml` (new, repo root, separate from
+  `docker-compose.yml` per the reasoning above): trimmed from Airflow's
+  official quickstart down to **LocalExecutor** (decision 2c) — no Redis
+  broker, no Celery worker, no Flower. Services: `airflow-postgres` (its own,
+  separate metadata DB), `airflow-init`, `airflow-api-server` (Airflow 3.x
+  renamed `webserver` → `api-server`; port `8081:8080`), `airflow-scheduler`,
+  `airflow-dag-processor` (Airflow 3.x split DAG parsing out of the
+  scheduler into its own service). No `airflow-triggerer` — deliberate,
+  `SSHOperator` isn't deferrable; noted in-file if a future DAG needs one.
+  `_PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-ssh` gets the
+  `SSHOperator` (2b) installed for local dev; bake into a custom image
+  instead once this is more than a laptop (Phase 5). **Actually started for
+  real** (`airflow-init`, `airflow-scheduler`, `airflow-dag-processor` all
+  ran against a real `apache/airflow:3.2.0-python3.12` pull) — see the
+  "What's remaining" section at the top for the full verification and the
+  one real bug found (`entrypoint: /bin/bash` breaking
+  `_PIP_ADDITIONAL_REQUIREMENTS`) and fixed in this file.
+- `airflow/dags|config|plugins/` scaffolded (empty, `.gitkeep`); `airflow/logs/`
+  added to `.gitignore` (Airflow's own runtime output, never committed).
+- CI (`.github/workflows/ci.yml`): added a `rabbitmq:4` service container
+  (no management UI needed in CI) next to `postgres`/`redis`, with a
+  `rabbitmq-diagnostics -q ping` health check, and `RABBITMQ_URL` in the
+  job's env — ready for Phase 2's integration test. Airflow DAG validation
+  stays deferred to Phase 4 as planned (doesn't need a running Airflow
+  stack).
+- README/CLAUDE.md updated (new "Migration in progress" note under
+  "Background jobs (arq)", Airflow quickstart commands, `airflow/`
+  top-level entry, `docker compose up -d` now includes RabbitMQ).
 
-### Phase 2 — RabbitMQ migration (replaces arq)
-1. `uv add "faststream[rabbit]"`; `uv remove arq hiredis` (deferred to the
-   end of this phase, once the cutover is verified — see Phase 5's rollback
-   note).
-2. New `app/core/queue.py` (replaces `app/core/job_queue.py`) — the
-   `FastStream` `RabbitBroker` instance + a `get_broker()` FastAPI
-   dependency, mirroring `job_queue.py`'s `get_arq_pool()` shape.
-3. Rewrite `app/workers/evaluation_export.py`: same `build_evaluation_export`
-   business logic (untouched — it already only takes a `job_id`), now
-   registered as a FastStream subscriber instead of an arq `WorkerSettings`
-   function. Same "run as its own process" story:
-   `uv run faststream run app.workers.evaluation_export:app` in place of
-   `uv run arq app.workers.evaluation_export.WorkerSettings`.
-4. `app/domains/evaluations/export_jobs.py::ExportJobService.enqueue` swaps
-   `arq_pool.enqueue_job("build_evaluation_export", str(job_id))` for a
-   `broker.publish(...)` call; update its `arq_pool: ArqRedis` parameter and
-   the router's `Depends(get_arq_pool)` accordingly.
-5. Declare a dead-letter queue (or FastStream's retry/nack support) for the
-   export queue — a job that fails repeatedly (e.g. MinIO unreachable)
-   should land somewhere visible, not silently vanish or retry forever. This
-   is new behavior arq didn't give us; decide the DLQ policy explicitly
-   (e.g. 3 retries with backoff, then DLQ + the `EvaluationExportJob` row
-   already gets marked `failed` with `error_message` regardless).
-6. `main.py`'s lifespan: replace `close_arq_pool()` with the broker's own
-   connect/close (FastStream brokers support `async with`/lifespan
-   integration directly — check its FastAPI integration docs for the
-   idiomatic hook, likely nicer than the current manual
-   `get_arq_pool`/`close_arq_pool` pair).
-7. Tests: `tests/unit/evaluations/test_export_jobs.py`'s `enqueue` tests swap
-   the mocked `arq_pool.enqueue_job` assertion for a mocked
-   `broker.publish` assertion — same shape, different call. Add an
-   integration test that publishes to a real (CI) RabbitMQ instance and
-   asserts the message lands on the expected queue (FastStream ships a test
-   client — `TestRabbitBroker` — that can assert this without a real broker
-   too; prefer that for speed, keep one real-broker smoke test for
-   confidence).
+**What's verified — all of it now:**
+- ✅ `faststream[rabbit]` really connects to and round-trips through a real
+  RabbitMQ container on this machine's Python 3.14 (Phase 0), and (Phase 2)
+  the real `app/core/queue.py`/`evaluation_export.py` pipeline does too.
+- ✅ Both compose files parse correctly (`docker compose config` on each).
+- ✅ `docker-compose.airflow.yml` actually starts end-to-end:
+  `airflow-init` ran `airflow db migrate` for real (metadata tables
+  created), `airflow-scheduler` + `airflow-dag-processor` came up and
+  stayed stable, and the dag-processor parsed
+  `airflow/dags/assessment_sweep_dag.py` with 0 errors. Full detail in
+  "What's remaining" at the top.
+- ✅ App still imports clean, `ruff check` clean; full suite green
+  including integration tests against a real Postgres (303 tests, no
+  skips, as of this session).
 
-### Phase 3 — Airflow migration (replaces APScheduler)
-1. `uv add typer`. New `app/cli.py` (or `app/cli/` if it grows) — a Typer
-   `sweep` command group calling the existing `run()` functions in
-   `app/scripts/expire_overdue_assessment_attempts.py` /
-   `disqualify_overdue_applications.py` unchanged; register `ats-cli =
-   "app.cli:app"` under `[project.scripts]`. `sweep_advisory_lock` stays
-   exactly where it is (inside each script's own lock-taking entry point,
-   now called by the Typer command instead of the old `if __name__ ==
-   "__main__":` block). Verify `uv run ats-cli sweep expire-attempts` /
-   `uv run ats-cli sweep disqualify-applications` work locally before
-   touching Airflow.
-2. Provision the SSH access path (2b): a deploy user (or existing one) on
-   the app host, an SSH key pinned to `docker compose run --rm app uv run
-   ats-cli sweep ...` via `authorized_keys` `command=` (or an equivalently
-   scoped restriction), and an Airflow `Connection` (type `ssh`) holding
-   that key. Confirm `ssh <that-connection> 'docker compose run --rm app uv
-   run ats-cli sweep expire-attempts'` works manually before wiring Airflow
-   to it.
-3. Bring up Airflow (Phase 1's compose file) with a `dags/` folder mounted
-   in.
-4. New `dags/assessment_sweep_dag.py`:
-   - `schedule_interval="*/15 * * * *"` (matching today's
-     `SCHEDULER_INTERVAL_MINUTES` default — or read it from an Airflow
-     Variable if it should stay configurable per-environment).
-   - `catchup=False`, `max_active_runs=1` (Airflow's own equivalent of "only
-     one tick running at a time" — the advisory lock becomes a
-     belt-and-suspenders guard against a *manual* CLI run colliding with a
-     scheduled DAG run, not the primary mutual-exclusion mechanism anymore).
-   - Two `SSHOperator` tasks per 2b, each running `docker compose run --rm
-     app uv run ats-cli sweep expire-attempts` /
-     `... sweep disqualify-applications` against the app-host SSH
-     connection from step 2:
-     `expire_attempts_task >> disqualify_applications_task` — the exact
-     ordering already documented in `scheduler.py`'s docstring and
-     `disqualify_overdue_applications.py`'s module comment, preserved.
-   - Retry policy (`retries=`, `retry_delay=`) and failure alerting
-     (`on_failure_callback` — Slack/email webhook, or at minimum
-     Airflow's own UI-visible failure state) — this is new capability
-     APScheduler never had; decide the alerting channel before cutover.
-   - The refresh-token-denylist housekeeping query currently tacked onto
-     `_run_periodic_jobs` (unrelated to the sweep, just riding the same
-     timer) becomes its own third task or its own DAG — don't silently keep
-     coupling it to the sweep's timing just because that's how it happened
-     to be wired today.
-5. Delete `app/core/scheduler.py` entirely, and its two calls
-   (`start_scheduler()`/`shutdown_scheduler()`) from `main.py`'s lifespan —
-   exactly the deletion D06 and the file's own docstring already promised.
-6. Remove `scheduler_enabled`/`scheduler_interval_minutes` from
-   `Settings`/`.env.example` (or keep `scheduler_interval_minutes` only as
-   documentation input to the DAG's schedule, if that's more convenient than
-   hand-editing the DAG file per environment).
-7. `sweep_advisory_lock` (`app/core/sweep_lock.py`) stays — both scripts'
-   lock-taking entry points keep taking it, so a manual `uv run ats-cli
-   sweep disqualify-applications` still can't collide with a
-   concurrently-running Airflow task.
-8. `uv remove apscheduler` once the DAG is verified running in every
-   environment that mattered (see Phase 5).
+### Phase 2 — RabbitMQ migration (replaces arq) — **done ✅, fully verified against a real broker**
+1. ~~`uv add "faststream[rabbit]"`~~ done in Phase 0. `uv remove arq` done
+   now that the cutover is code-complete (`hiredis` wasn't actually a
+   direct dependency — it came in transitively via arq and left with it).
+2. `app/core/queue.py` (new, replaces the deleted `app/core/job_queue.py`)
+   — `RabbitBroker(settings.rabbitmq_url)`, a `get_broker()` FastAPI
+   dependency, and the two `RabbitQueue` declarations (main queue + DLQ,
+   see point 5).
+3. `app/workers/evaluation_export.py` rewritten: `build_evaluation_export`'s
+   business logic is **byte-for-byte unchanged** (still just takes
+   `job_id: str` — arq's `ctx: dict` first-arg was never used, so dropping
+   it was zero-risk), now a `@broker.subscriber(...)` instead of an arq
+   `WorkerSettings.functions` entry. Run as its own process:
+   `uv run faststream run app.workers.evaluation_export:app`.
+4. `ExportJobService.enqueue` (`export_jobs.py`) swaps
+   `arq_pool.enqueue_job("build_evaluation_export", str(job_id))` for
+   `broker.publish(str(job_id), EVALUATION_EXPORT_QUEUE)`; its
+   `arq_pool: ArqRedis` param became `broker: RabbitBroker`, and the
+   router's `Depends(get_arq_pool)` became `Depends(get_broker)`.
+5. **Dead-letter queue, done — but not the retry policy originally
+   planned.** `EVALUATION_EXPORT_QUEUE` declares
+   `x-dead-letter-exchange`/`x-dead-letter-routing-key` pointing at
+   `EVALUATION_EXPORT_DLQ` (`evaluation_export.dlq`), both in
+   `app/core/queue.py`. **Discovered while implementing:** the installed
+   `faststream==0.7.5` subscriber has no declarative `retry=N` option (that
+   API belongs to an older FastStream generation the earlier web research
+   surfaced) — only a binary `AckPolicy` (`ACK` / `REJECT_ON_ERROR` /
+   `NACK_ON_ERROR` / `MANUAL`). The subscriber uses
+   `ack_policy=AckPolicy.REJECT_ON_ERROR`: **one attempt**, then straight to
+   the DLQ on any unhandled exception — still strictly more visibility than
+   arq gave us (a failed arq job retried silently up to its own default
+   `max_tries` and then just vanished), but not the "3 retries then DLQ"
+   originally sketched. A second subscriber
+   (`log_dead_lettered_export`) on the DLQ logs what lands there — pure
+   visibility, not a reprocessing path (the `EvaluationExportJob` row is
+   already `status="failed"` with `error_message` by the time a message
+   reaches the DLQ). If retries are wanted later, they'd need to be
+   hand-rolled (a retry-count header, re-published by the same handler),
+   not assumed from the decorator — noted in the worker module's own
+   comment.
+6. `main.py`'s lifespan: `close_arq_pool()` → `await rabbitmq_broker.stop()`,
+   paired with a new `await rabbitmq_broker.start()` at startup (arq's pool
+   was lazily created on first use; explicit `start()` is closer to how
+   `redis_client` and the DB engines are already handled here). Also added
+   a RabbitMQ check to `GET /health/ready` (`rabbitmq_broker.ping(timeout=5)`),
+   matching the existing Postgres/Redis checks — not originally scoped in
+   this phase, but a two-line addition once the broker object existed.
+7. Tests: `tests/unit/evaluations/test_export_jobs.py`'s `enqueue` tests
+   swap the mocked `arq_pool.enqueue_job` assertion for a mocked
+   `broker.publish(str(job_id), EVALUATION_EXPORT_QUEUE)` assertion — unit
+   level, mocked, still passing. **Real-broker verification now done too**,
+   for real, not with `TestRabbitBroker`: started the actual worker process,
+   created a real `EvaluationExportJob` + real `JobPost`/`User` rows via the
+   integration test factories, published through the real `app/core/queue.py`
+   broker, and watched the job reach `status="done"` with a real ZIP
+   sitting in MinIO (readable back out, correct contents). Also separately
+   verified the "job row not found" branch acks cleanly. `app.main`/
+   `app.workers.evaluation_export` import clean, `ruff check`/
+   `ruff format --check` clean, full suite green (272 unit + 31 integration,
+   no skips). A formal `TestRabbitBroker`-based automated test for CI is
+   still worth adding later, but the *behavior* itself is now proven, not
+   assumed.
+
+### Phase 3 — Airflow migration (replaces APScheduler) — **code done, DAG verified for real; cutover deliberately not flipped**
+1. **Done.** `uv add typer`, plus `[build-system]`/`tool.hatch.build.targets.wheel`
+   added to `pyproject.toml` (the project wasn't packaged before, so
+   `[project.scripts]` entry points silently did nothing until this was
+   added — discovered when `uv run ats-cli` first came back empty). New
+   `app/cli.py` — a Typer `sweep` command group; `run()`/`main()` return
+   values in each script were **changed from `None` to the counts they
+   already computed** (`int` / `dict[str, int]`) — the smallest possible
+   extension needed for real `--json` output, not the "leave them fully
+   untouched" originally sketched. `sweep_advisory_lock` itself is
+   untouched. Verified for real, including a successful run: with Postgres
+   back up, `uv run ats-cli sweep expire-attempts` and
+   `disqualify-applications` both ran clean against the real (now-seeded)
+   database as part of this session's broader re-verification.
+2. **Not done — this is infrastructure provisioning, not code**, and
+   belongs to whoever actually deploys this (the app host, the SSH user,
+   the Airflow Connection all need to exist somewhere real). Documented in
+   `airflow/dags/assessment_sweep_dag.py`'s own module docstring as
+   required setup instead. This is now the *actual* remaining gate — not
+   Docker, not code (see "What's remaining" at the top).
+3. **Done.** `docker-compose.airflow.yml`'s `airflow-init`/`airflow-scheduler`/
+   `airflow-dag-processor` all started and ran for real once Docker
+   recovered — see "What's remaining" for the full account, including the
+   `entrypoint: /bin/bash` bug found and fixed.
+4. **Done**, with corrections found while implementing (the earlier
+   sketch used stale Airflow 2.x conventions), **and now import-verified
+   against a real Airflow 3.2.0 install**:
+   - `schedule="*/15 * * * *"` — **not** `schedule_interval=`, which
+     Airflow 3 removed (merged into `schedule`, deprecated since 2.4).
+   - DAG authoring imports from **`airflow.sdk`**, not `airflow.models.dag`
+     — Airflow 3.0's Task SDK is now the documented public interface;
+     the older import paths are deprecated.
+   - `SSHOperator` from `airflow.providers.ssh.operators.ssh`
+     (`apache-airflow-providers-ssh`, already wired into
+     `docker-compose.airflow.yml`'s dev-time `_PIP_ADDITIONAL_REQUIREMENTS`).
+   - The app-host directory the SSH command `cd`s into before
+     `docker compose run` comes from an Airflow Variable
+     (`{{ var.value.get('ats_app_dir', '/opt/ats-fastapi') }}`, Jinja,
+     resolved at task-run time) — **not** a direct `Variable.get()` call at
+     DAG-parse time, which has a known `airflow dags reserialize` import
+     error in recent Airflow versions.
+   - `catchup=False`, `max_active_runs=1` as planned; `retries=2`,
+     `retry_delay=timedelta(minutes=2)` as the retry policy (alerting
+     channel — Slack/email `on_failure_callback` — left as a real
+     deployment's decision, not hardcoded here).
+   - Three tasks, not two: `expire_attempts_task >> disqualify_applications_task`
+     (ordering preserved) plus an independent `purge_expired_tokens_task`
+     (decision 2f — its own task, no dependency edge to the other two,
+     since it has nothing to do with their ordering).
+   - **Verified for real, inside a running Airflow 3.2.0 container**: the
+     module imports cleanly, `dag.dag_id == "assessment_sweep"`, all 3 tasks
+     present with the correct ids, `expire_attempts.downstream_task_ids ==
+     {"disqualify_applications"}` and `purge_expired_tokens` correctly has
+     no edges either way. The real dag-processor separately parsed it with
+     0 errors and computed the correct next scheduled run from the cron.
+     Full detail in "What's remaining" at the top.
+5. **Deliberately NOT done.** `app/core/scheduler.py` is untouched and
+   still the live mechanism. The DAG mechanically works now (point 4), but
+   deleting `scheduler.py` still needs the Phase 5 parallel-run business-
+   outcome verification first — that's gated on point 2's real SSH/host
+   provisioning, not on anything a coding session controls.
+6. **Deliberately NOT done**, same reasoning as point 5 —
+   `scheduler_enabled`/`scheduler_interval_minutes` stay in `Settings`/
+   `.env.example`, still true and still load-bearing.
+7. **Done** — untouched, as planned. (See point 1 — only the two sweep
+   scripts' `run()`/`main()` return types changed, not their locking.)
+8. **Deliberately NOT done** — `apscheduler` stays a dependency; see
+   points 5–6.
 
 ### Phase 4 — Testing & CI
 - **RabbitMQ:** integration test publishing/consuming against the real CI
   broker (Phase 1); FastStream's `TestRabbitBroker` for fast unit-level
   coverage of the publish call and the consumer's message handling.
-- **Airflow:** a `dag_bag` test — import `dags/assessment_sweep_dag.py`,
-  assert zero import errors, assert the task count and the
-  `expire_attempts_task >> disqualify_applications_task` dependency edge.
-  This is the standard, cheap Airflow test pattern (no running
-  scheduler/webserver needed) and should run in CI as its own quick job.
-- **CLI:** `tests/unit/test_cli.py` (Typer ships a `CliRunner` — same shape
-  as FastAPI's `TestClient`) invoking `sweep expire-attempts` /
-  `sweep disqualify-applications` against mocked repositories, asserting
-  exit code 0 and the `run()` call — proves the Typer wiring itself is
-  correct in CI without needing SSH/Docker/Airflow at all; the SSH →
-  `docker compose run` path (step 2 of Phase 3) is verified manually per
-  environment instead, since it's infrastructure, not application code.
+- **Airflow — behavior proven manually, CI automation still to do.** The
+  exact checks a `dag_bag` test would make (zero import errors, the 3-task
+  count, the `expire_attempts_task >> disqualify_applications_task` edge
+  independent of `purge_expired_tokens_task`) were all run manually inside a
+  real `apache/airflow:3.2.0-python3.12` container — see "What's remaining"
+  at the top. Turning that into an actual automated `dag_bag` test with its
+  **own** dependency group (separate from this repo's
+  `dependencies`/`dependency-groups.dev` — Airflow must not become a
+  dependency of the FastAPI app itself, per 2b/2d) and its own CI job is
+  still to do, but is now "wire up automation for a known-working check,"
+  not "verify this works at all."
+- **CLI — done.** `tests/unit/test_cli.py` (Typer's `CliRunner`, same shape
+  as FastAPI's `TestClient`) — 6 tests covering all three `sweep` commands:
+  `--json` output shape, exit 0 on a plain success, the "skipped" message
+  and exit 0 when the advisory lock is already held, and exit != 0 when the
+  wrapped script raises. Runs in the main suite already (`uv run pytest`),
+  no SSH/Docker/Airflow needed — proves the Typer wiring itself, not the
+  SSH → `docker compose run` path (that's still infrastructure to verify
+  per-environment, not application code this repo's tests can reach).
 - Re-run the full existing suite (`uv run pytest`) after each phase — same
   ritual as every batch in this session: `ruff check`, `ruff format
   --check`, `pytest -q`, `alembic check` (Airflow's own metadata DB has its
   own separate migration story per 2c, not `alembic check`'s concern).
 
 ### Phase 5 — Rollout / cutover
-- **Queue (Phase 2):** clean cutover, not a parallel run — there's no
-  durable backlog to migrate (in-flight export jobs are short-lived and
-  polled by the user; worst case, a job started right before cutover is
-  lost and the user retries). Sequence: deploy the FastStream consumer
-  process alongside the still-running arq worker → flip
-  `ExportJobService.enqueue` to publish to RabbitMQ → verify one real export
-  end-to-end → retire the arq worker process and its dependency.
-- **Scheduler (Phase 3):** this one changes production data
-  (disqualifications, attempt expiry) on its own timer with no user in the
-  loop — stage the cutover per environment: run the Airflow DAG **and**
-  leave `SCHEDULER_ENABLED` on (both active) for one full sweep-interval
-  cycle in a non-prod environment first, diff the outcomes (same
+- **Queue (Phase 2): done.** This ended up being the clean cutover
+  originally planned, not a staged parallel run — arq is fully removed
+  (`uv remove arq`) and the real end-to-end verification (see "What's
+  remaining" at the top) stood in for "verify one real export end-to-end"
+  before retiring it. Nothing left to do here.
+- **Scheduler (Phase 3): not started — this is the real remaining work.**
+  This one changes production data (disqualifications, attempt expiry) on
+  its own timer with no user in the loop, so it still gets the staged
+  treatment the queue didn't need: once the real SSH/host provisioning
+  (point 2 in "What's remaining") exists somewhere, run the Airflow DAG
+  **and** leave `SCHEDULER_ENABLED` on (both active) for one full
+  sweep-interval cycle in a non-prod environment, diff the outcomes (same
   applications disqualified, same attempts expired), then flip
   `SCHEDULER_ENABLED=false` and confirm only the DAG is now producing the
-  effects, before deleting `scheduler.py`.
-- **Rollback:** keep the arq/APScheduler code on a branch (or just don't
-  merge the deletion commits) until each cutover has run cleanly in
+  effects, before deleting `scheduler.py`. Everything mechanical the DAG
+  needs to pass this check is now verified (Phase 3 point 4); what's left
+  is purely "does it produce the same real-world outcomes," which needs
+  the real provisioning to even attempt.
+- **Rollback:** keep the APScheduler code on a branch (or just don't merge
+  the deletion commits) until the scheduler cutover has run cleanly in
   production for a defined bake period (e.g. one week) — cheap insurance
-  given how contained both deletions are.
+  given how contained the deletion is.
 
 ### Phase 6 — Documentation & cleanup
-- CLAUDE.md: add an `airflow/` top-level-package entry (per the project's
-  "every top-level package is documented" convention) and an `app/cli.py`
-  entry (the Typer `sweep` command group); rewrite the
-  `app/workers/evaluation_export.py` note to describe the FastStream
-  consumer instead of the arq `WorkerSettings` shape; update the
-  "Background jobs (arq)" README section title/instructions to RabbitMQ +
-  FastStream commands, and add a "Sweep CLI" note pointing at `ats-cli
-  sweep --help` plus the SSH-connection provisioning steps from Phase 3.
-- Update D06 with a final "implemented" note (mirroring how D01/D04/D06/D09
-  already got marked implemented earlier in this project's history) instead
-  of leaving it as a forward-looking decision.
-- New `docs/decisions/D10-queue-orchestration-technology.md` recording the
-  RabbitMQ-vs-alternatives and Airflow-executor-vs-alternatives calls made
-  in section 2, in the same ADR shape as D01–D09 — so the *why* survives
-  independently of this plan document once the migration is old news.
-- Remove `arq`/`hiredis`/`apscheduler` from `pyproject.toml` (already noted
-  per-phase above; called out again here as the final "is anything still
-  importing the old thing" sweep — `grep -rn "arq\|apscheduler" app/` should
-  come back empty).
+- **Mostly done, incrementally, per-phase rather than saved for the end:**
+  CLAUDE.md has the `airflow/` top-level entry, the `app/cli.py` entry, the
+  `app/scripts/` entry covering all three sweep scripts, and rewritten notes
+  for `evaluation_export.py` (FastStream, not arq) and the disqualify/expire
+  sweep (three-task DAG status, `scheduler.py` deletion explicitly gated on
+  Phase 5). README's "Background jobs" and "Background sweep" sections
+  describe the current (arq-free) reality and the Airflow cutover's
+  not-yet-flipped status, with `ats-cli` commands documented.
+- **Done:** [`docs/decisions/D10-queue-orchestration-technology.md`](../decisions/D10-queue-orchestration-technology.md)
+  — one coherent ADR for the RabbitMQ-vs-alternatives, `AckPolicy` vs. the
+  originally-assumed `retry=N`, and Airflow-executor/SSH-vs-Docker-socket
+  calls, superseding the scattered per-phase "discovered while
+  implementing" notes above as the durable record.
+- **Still pending, correctly held until the actual cutover:**
+  - Update D06 with a final "implemented" note — **not yet**, since the
+    scheduler hasn't actually been replaced (Phase 3 points 5/6/8).
+  - Remove `apscheduler` from `pyproject.toml` — blocked on Phase 3
+    points 5/6/8 (the scheduler is still live). `arq`/`hiredis` are already
+    gone (Phase 2).
 
 ## 5. Operational cost, called out explicitly
 

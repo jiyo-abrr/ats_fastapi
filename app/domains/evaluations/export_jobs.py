@@ -1,8 +1,8 @@
 """Background evaluation-pack export jobs (review F09/F26).
 
 `EvaluationExportJob` tracks one async pack build end to end: `pending` when
-enqueued, `running` while the arq worker builds it, `done` (with
-`result_object_key` in MinIO) or `failed` (with `error_message`) when
+enqueued, `running` while the RabbitMQ/FastStream worker builds it, `done`
+(with `result_object_key` in MinIO) or `failed` (with `error_message`) when
 finished. This is new code, not a rework of the rest of `evaluations/` (which
 still takes `AsyncSession` directly — see docs/architecture.md's F07 note) —
 it gets the plain-dataclass-entity + repository treatment because it's small,
@@ -14,10 +14,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from arq.connections import ArqRedis
+from faststream.rabbit import RabbitBroker
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.queue import EVALUATION_EXPORT_QUEUE
 from app.core.unit_of_work import UnitOfWork
 from app.domains.evaluations.exceptions import EvaluationExportJobNotFoundError
 from app.domains.evaluations.models import (
@@ -116,9 +117,9 @@ class EvaluationExportJobRepository:
 
 class ExportJobService:
     """Enqueue/poll side of the async export — the actual pack-building logic
-    lives in `app/workers/evaluation_export.py` (arq consumer), never here.
-    Router endpoints are manage_applications-gated, so this service does no
-    further authorization of its own."""
+    lives in `app/workers/evaluation_export.py` (a FastStream/RabbitMQ
+    consumer), never here. Router endpoints are manage_applications-gated,
+    so this service does no further authorization of its own."""
 
     def __init__(self, jobs: EvaluationExportJobRepository, uow: UnitOfWork):
         self.jobs = jobs
@@ -130,7 +131,7 @@ class ExportJobService:
         job_post_id: uuid.UUID,
         requested_by_user_id: uuid.UUID,
         status_filter: list[str] | None,
-        arq_pool: ArqRedis,
+        broker: RabbitBroker,
     ) -> EvaluationExportJob:
         job_id = uuid.uuid4()
         entity = EvaluationExportJob(
@@ -141,7 +142,7 @@ class ExportJobService:
         )
         await self.jobs.create(entity)
         await self.uow.commit()
-        await arq_pool.enqueue_job("build_evaluation_export", str(job_id))
+        await broker.publish(str(job_id), EVALUATION_EXPORT_QUEUE)
         return entity
 
     async def get(self, job_id: uuid.UUID) -> EvaluationExportJob:

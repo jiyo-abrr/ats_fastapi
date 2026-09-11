@@ -1,0 +1,127 @@
+# Airflow's own compose file — deliberately separate from docker-compose.yml
+# (see docs/plans/rabbitmq-airflow-migration.md, Phase 1). Different
+# lifecycle from the app: its own Postgres, its own containers, and
+# genuinely optional if you're just doing API work on a laptop.
+#
+# Trimmed from Airflow's official quickstart compose file down to
+# LocalExecutor (decision 2c in the migration plan) — no Redis broker, no
+# Celery worker, no Flower; a single scheduler runs tasks directly. Airflow
+# periodically changes its official file's shape (Airflow 3 split DAG
+# parsing into its own `dag-processor` service, separate from the
+# scheduler) — if this drifts, diff against the current official file at
+# https://airflow.apache.org/docs/apache-airflow/stable/docker-compose.yaml
+# and re-trim rather than trusting this comment to stay accurate forever.
+#
+# Quickstart:
+#   AIRFLOW_UID=$(id -u) docker compose -f docker-compose.airflow.yml up airflow-init
+#   AIRFLOW_UID=$(id -u) docker compose -f docker-compose.airflow.yml up
+# UI: http://localhost:8081 (default admin/admin — see _AIRFLOW_WWW_USER_*
+# below; change before this is anything but a laptop).
+#
+# The two/three sweep tasks (Phase 3) reach the app over SSH
+# (docs/plans/rabbitmq-airflow-migration.md 2b) — nothing here needs to see
+# the app's own containers or database directly.
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.2.0-python3.12
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # apache-airflow-providers-ssh — the SSHOperator the sweep DAG needs
+    # (Phase 3). Fine for local dev via _PIP_ADDITIONAL_REQUIREMENTS; bake
+    # into a custom image (FROM apache/airflow:3.2.0-python3.12 + a
+    # requirements.txt) instead once this is more than a laptop (Phase 5) —
+    # installing at container-start time on every restart is a dev-only
+    # convenience, not a production pattern.
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_AIRFLOW_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-ssh}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/config:/opt/airflow/config
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    airflow-postgres:
+      condition: service_healthy
+
+services:
+  airflow-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  airflow-init:
+    <<: *airflow-common
+    # Deliberately NOT `entrypoint: /bin/bash` (a common copy-pasted pattern
+    # that breaks this image) — overriding the entrypoint skips the image's
+    # own `/entrypoint` script, which is what makes `_PIP_ADDITIONAL_REQUIREMENTS`
+    # actually resolve on PYTHONPATH afterward; skip it and `airflow` itself
+    # 404s with `ModuleNotFoundError: No module named 'airflow'` even though
+    # the package is right there. Keep the image's default ENTRYPOINT and
+    # pass `bash -c "..."` as the *command* instead — verified against a
+    # real `apache/airflow:3.2.0-python3.12` pull (see
+    # docs/plans/rabbitmq-airflow-migration.md's Phase 1 verification notes).
+    command:
+      - bash
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
+          --firstname Admin --lastname User --role Admin \
+          --email admin@example.com || true
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8081:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # No `airflow-triggerer` service — it's for deferrable operators, and
+  # SSHOperator (the only operator type this plan's DAG uses) isn't
+  # deferrable. Add it back (command: triggerer, same shape as the other
+  # services here) if a future DAG needs one.
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow_postgres_data:

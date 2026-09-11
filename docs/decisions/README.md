@@ -15,3 +15,4 @@ question, the choice, why, and whether it's provisional.
 | D07 | Migration baseline | no |
 | D08 | Session / refresh semantics | yes (rotation is follow-up) |
 | D09 | CSV injection handling | no |
+| D10 | Queue/orchestration technology (RabbitMQ + Airflow) | partly (cutover timing is) |

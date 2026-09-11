@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .env
+
+# Airflow's own runtime output (docker-compose.airflow.yml mounts these in) —
+# not app state, nothing here should ever be committed.
+airflow/logs/

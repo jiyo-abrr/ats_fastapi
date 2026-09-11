@@ -1,17 +1,17 @@
 import re
 import uuid
 
-from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi import status as status_codes
 from fastapi.concurrency import run_in_threadpool
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
+from faststream.rabbit import RabbitBroker
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.job_queue import get_arq_pool
+from app.core.queue import get_broker
 from app.core.storage import ObjectNotFoundError, get_object
 from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
@@ -142,10 +142,10 @@ async def export_evaluation_pack_async(
     current_user: auth_entities.User = Depends(get_current_user),
     job_post_service: JobPostService = Depends(get_job_post_service),
     export_jobs: ExportJobService = Depends(get_export_job_service),
-    arq_pool: ArqRedis = Depends(get_arq_pool),
+    broker: RabbitBroker = Depends(get_broker),
 ) -> EvaluationExportJobOut:
-    """For a job post too big for the synchronous `/export` route: enqueues the
-    pack build on an arq worker (review F09/F26) and returns immediately. Poll
+    """For a job post too big for the synchronous `/export` route: publishes
+    the pack build to RabbitMQ (review F09/F26) and returns immediately. Poll
     `GET /applications/export-jobs/{id}` for status, then
     `GET /applications/export-jobs/{id}/download`."""
     await job_post_service.get(job_post_id)  # 404s early if the job post is gone
@@ -153,7 +153,7 @@ async def export_evaluation_pack_async(
         job_post_id=job_post_id,
         requested_by_user_id=current_user.id,
         status_filter=[s.value for s in status] if status else None,
-        arq_pool=arq_pool,
+        broker=broker,
     )
     return EvaluationExportJobOut.model_validate(job)
 

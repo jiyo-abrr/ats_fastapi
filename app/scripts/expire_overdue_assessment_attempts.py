@@ -24,9 +24,11 @@ from app.domains.job_posts.repository import JobPostRepository
 # main() on a timer for now.
 
 
-async def run() -> None:
+async def run() -> int:
     """The sweep itself, with no lock — the scheduler composes this under one
-    shared advisory lock together with the disqualification sweep."""
+    shared advisory lock together with the disqualification sweep. Returns
+    the expired count (used by `app.cli`'s `--json` output; the standalone
+    `__main__` entry point below still just prints and discards it)."""
     async with AsyncSessionLocal() as db:
         uow = UnitOfWork(db)
         service = AssessmentService(
@@ -40,14 +42,16 @@ async def run() -> None:
         )
         expired_ids = await service.expire_overdue_attempts()
         print(f"Expired {len(expired_ids)} overdue assessment attempt(s)")
+        return len(expired_ids)
 
 
-async def main() -> None:
-    """CLI / task-runner entry point — takes the shared sweep lock."""
+async def main() -> int | None:
+    """CLI / task-runner entry point — takes the shared sweep lock. Returns
+    `None` if another run already held the lock (skipped this tick)."""
     async with AsyncSessionLocal() as lock_db, sweep_advisory_lock(lock_db) as acquired:
         if not acquired:
-            return
-        await run()
+            return None
+        return await run()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.queue import EVALUATION_EXPORT_QUEUE
 from app.domains.evaluations.exceptions import EvaluationExportJobNotFoundError
 from app.domains.evaluations.export_jobs import EvaluationExportJob, ExportJobService
 
@@ -14,9 +15,9 @@ def make_service():
 
 
 class TestEnqueue:
-    async def test_stages_creates_commits_and_enqueues_on_arq(self):
+    async def test_stages_creates_commits_and_publishes_to_rabbitmq(self):
         service, jobs, uow = make_service()
-        arq_pool = AsyncMock()
+        broker = AsyncMock()
         job_post_id = uuid.uuid4()
         user_id = uuid.uuid4()
 
@@ -24,7 +25,7 @@ class TestEnqueue:
             job_post_id=job_post_id,
             requested_by_user_id=user_id,
             status_filter=["applied", "prescreening"],
-            arq_pool=arq_pool,
+            broker=broker,
         )
 
         jobs.create.assert_called_once()
@@ -34,19 +35,17 @@ class TestEnqueue:
         assert created_entity.status_filter == "applied,prescreening"
         assert created_entity.status == "pending"
         uow.commit.assert_called_once()
-        arq_pool.enqueue_job.assert_called_once_with(
-            "build_evaluation_export", str(result.id)
-        )
+        broker.publish.assert_called_once_with(str(result.id), EVALUATION_EXPORT_QUEUE)
 
     async def test_no_status_filter_stored_as_none(self):
         service, jobs, uow = make_service()
-        arq_pool = AsyncMock()
+        broker = AsyncMock()
 
         await service.enqueue(
             job_post_id=uuid.uuid4(),
             requested_by_user_id=uuid.uuid4(),
             status_filter=None,
-            arq_pool=arq_pool,
+            broker=broker,
         )
 
         created_entity = jobs.create.call_args[0][0]
