@@ -12,8 +12,11 @@ from app.domains.assessments.attempts.enums import AttemptStatus, TemplateType
 from app.domains.assessments.attempts.exceptions import (
     AssessmentAttemptExpiredError,
     AssessmentAttemptNotFoundError,
+    AssessmentDeadlinePassedError,
     InvalidAssessmentAttemptReopenError,
+    MissingAssessmentTemplateError,
     NotCurrentQuestionError,
+    ParentApplicationNotAcceptingAssessmentsError,
 )
 from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.assessments.technical_assessment_templates import (
@@ -173,6 +176,47 @@ class TestCreateAttemptsForApplication:
         attempts.add.assert_not_called()
 
 
+class TestParentEligibility:
+    async def test_withdrawn_parent_cannot_start_question(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(status=AttemptStatus.NOT_STARTED)
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            applicant_id=user.id, status=ApplicationStatus.WITHDRAWN
+        )
+
+        with pytest.raises(ParentApplicationNotAcceptingAssessmentsError):
+            await service.start_question(attempt.id, uuid.uuid4(), user)
+        attempts.start_attempt.assert_not_called()
+
+    async def test_deleted_template_raises_domain_error_not_attributeerror(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(status=AttemptStatus.NOT_STARTED)
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(applicant_id=user.id)
+        templates.get_by_id.return_value = None  # template deleted after attempt
+
+        with pytest.raises(MissingAssessmentTemplateError):
+            await service.start_question(attempt.id, uuid.uuid4(), user)
+
+    async def test_past_outer_deadline_cannot_submit_answer(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        attempt = make_attempt(status=AttemptStatus.IN_PROGRESS)
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            applicant_id=user.id,
+            status=ApplicationStatus.APPLIED,
+            assessment_deadline=datetime.now(UTC) - timedelta(hours=1),
+        )
+
+        with pytest.raises(AssessmentDeadlinePassedError):
+            await service.submit_answer(attempt.id, uuid.uuid4(), 3, user)
+        attempts.submit_answer.assert_not_called()
+
+
 class TestStartQuestion:
     async def test_non_owner_gets_not_found(self):
         service, attempts, templates, job_posts, applications, uow = make_service()
@@ -317,6 +361,23 @@ class TestReopen:
 
         with pytest.raises(InvalidAssessmentAttemptReopenError):
             await service.reopen(attempt.id, reason="please", current_user=make_user())
+
+    async def test_rejects_when_application_is_withdrawn(self):
+        # Second-review F05: reopening a terminal parent produces an attempt the
+        # applicant can never continue (start/submit are gated).
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        attempt = make_attempt(status=AttemptStatus.EXPIRED)
+        attempts.get_by_id.return_value = attempt
+        applications.get_by_id.return_value = make_application(
+            status=ApplicationStatus.WITHDRAWN
+        )
+
+        with pytest.raises(InvalidAssessmentAttemptReopenError):
+            await service.reopen(
+                attempt.id, reason="please", current_user=make_user(role="hr")
+            )
+        attempts.supersede_answers.assert_not_called()
+        attempts.add_reopen.assert_not_called()
 
     async def test_happy_path_supersedes_resets_and_logs(self):
         service, attempts, templates, job_posts, applications, uow = make_service()

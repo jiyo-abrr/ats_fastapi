@@ -13,9 +13,7 @@ class PositionService:
         self.positions = positions
         self.uow = uow
 
-    async def create(
-        self, *, title: str, description: str | None
-    ) -> entities.Position:
+    async def create(self, *, title: str, description: str | None) -> entities.Position:
         position_id = uuid.uuid4()
         await self.positions.add(
             entities.Position(id=position_id, title=title, description=description)
@@ -50,6 +48,5 @@ class PositionService:
         except IntegrityError:
             await self.uow.rollback()
             raise PositionInUseError(
-                f"Position '{position_id}' is still referenced by one or more "
-                "job posts"
+                f"Position '{position_id}' is still referenced by one or more job posts"
             ) from None

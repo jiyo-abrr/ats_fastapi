@@ -15,6 +15,7 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.csv_safe import csv_safe
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
 from app.domains.evaluations.dimensions import (
@@ -108,7 +109,9 @@ class EvaluationService:
         result = await self.db.execute(
             select(ApplicationEvaluation)
             .where(ApplicationEvaluation.application_id == application_id)
-            .order_by(ApplicationEvaluation.created_at.desc())
+            .order_by(
+                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
+            )
             .limit(1)
         )
         return result.scalar_one_or_none()
@@ -142,7 +145,9 @@ class EvaluationService:
         eval_rows = await self.db.execute(
             select(ApplicationEvaluation)
             .where(ApplicationEvaluation.application_id.in_(application_ids))
-            .order_by(ApplicationEvaluation.created_at.desc())
+            .order_by(
+                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
+            )
         )
         latest: dict[uuid.UUID, ApplicationEvaluation] = {}
         for row in eval_rows.scalars().all():
@@ -182,7 +187,9 @@ class EvaluationService:
         result = await self.db.execute(
             select(ApplicationEvaluation)
             .where(ApplicationEvaluation.application_id.in_(application_ids))
-            .order_by(ApplicationEvaluation.created_at.desc())
+            .order_by(
+                ApplicationEvaluation.created_at.desc(), ApplicationEvaluation.id.desc()
+            )
         )
         out: dict[uuid.UUID, dict] = {}
         for row in result.scalars().all():
@@ -219,7 +226,10 @@ class EvaluationService:
             evals = await self.db.execute(
                 select(ApplicationEvaluation)
                 .where(ApplicationEvaluation.application_id.in_(app_ids))
-                .order_by(ApplicationEvaluation.created_at.desc())
+                .order_by(
+                    ApplicationEvaluation.created_at.desc(),
+                    ApplicationEvaluation.id.desc(),
+                )
             )
             for e in evals.scalars().all():
                 latest.setdefault(e.application_id, e)
@@ -263,19 +273,25 @@ class EvaluationService:
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        writer.writerow(header)
+
+        def _row(cells: list) -> None:
+            # Guard user-authored names / free text against spreadsheet formula
+            # injection — see docs/decisions/D09.
+            writer.writerow([csv_safe(c) for c in cells])
+
+        _row(header)
         for app_id, first, last, email, status in app_rows:
             evaluation = latest.get(app_id)
             base = [str(app_id), f"{first} {last}", email, status]
             if evaluation is None:
-                writer.writerow(base + [""] * (len(header) - len(base)))
+                _row(base + [""] * (len(header) - len(base)))
                 continue
             smap = scores_by_eval.get(evaluation.id, {})
             dimension_values: list[str] = []
             for key in dimensions:
                 rating, reason = smap.get(key, ("", ""))
                 dimension_values += [rating, reason]
-            writer.writerow(
+            _row(
                 [
                     *base,
                     evaluation.recommendation or "",

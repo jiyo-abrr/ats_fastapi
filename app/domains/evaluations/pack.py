@@ -17,6 +17,13 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 
+from app.core.csv_safe import csv_safe
+
+# Bounds on one evaluation pack (review F09/F26, decision D05). Over either, the
+# route returns 413; a background-job path is the follow-up.
+EVALUATION_PACK_MAX = 200
+EVALUATION_PACK_MAX_BYTES = 300 * 1024 * 1024  # 300 MiB of résumé bytes
+
 _TEMPLATE_LABELS = {
     "pre_assessment": "Pre-assessment",
     "culture_fit": "Culture fit",
@@ -337,7 +344,9 @@ def _results_template_csv(applicants: list[dict]) -> str:
     for entry in applicants:
         row = entry["row"]
         name = f"{row.applicant_first_name} {row.applicant_last_name}"
-        writer.writerow([str(row.id), name, *[""] * (len(EVAL_CSV_COLUMNS) - 2)])
+        writer.writerow(
+            [str(row.id), csv_safe(name), *[""] * (len(EVAL_CSV_COLUMNS) - 2)]
+        )
     return buffer.getvalue()
 
 

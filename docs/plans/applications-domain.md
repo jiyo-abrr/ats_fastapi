@@ -104,10 +104,15 @@ async def list_for_review(
 # applications/service.py — thin pass-through, no business logic, just so the
 # router depends on the service and never the repository directly
 async def list_for_review(self, *, job_post_id, status) -> Select:
-    return await self.applications.list_for_review(job_post_id=job_post_id, status=status)
+    return await self.applications.list_for_review(
+        job_post_id=job_post_id, status=status
+    )
+
 
 # applications/router.py
-@router.get("", response_model=Page[ApplicationReviewOut], dependencies=[_manage_applications])
+@router.get(
+    "", response_model=Page[ApplicationReviewOut], dependencies=[_manage_applications]
+)
 async def list_applications(
     job_post_id: uuid.UUID | None = None,
     status: ApplicationStatus | None = None,
@@ -115,7 +120,11 @@ async def list_applications(
     service: ApplicationService = Depends(get_application_service),
 ) -> Page[ApplicationReviewOut]:
     query = await service.list_for_review(job_post_id=job_post_id, status=status)
-    return await apaginate(db, query, transformer=lambda rows: [ApplicationReviewOut.model_validate(r) for r in rows])
+    return await apaginate(
+        db,
+        query,
+        transformer=lambda rows: [ApplicationReviewOut.model_validate(r) for r in rows],
+    )
 ```
 
 **`GET /applications/me` (applicant's own list)** — `ApplicationSummaryOut`: `id`, `status`, `created_at`, `job_post_id`, `job_title`. Applicants already know who they are, so no applicant columns needed — just enough to render "your applications" without a second round-trip to `/job-posts/{id}` per row.

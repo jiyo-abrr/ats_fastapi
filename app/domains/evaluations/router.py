@@ -1,13 +1,15 @@
 import re
 import uuid
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import status as status_codes
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.domains.applications.dependencies import get_application_service
+from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.exceptions import ResumeUnavailableError
 from app.domains.applications.service import ApplicationService
 from app.domains.assessments.attempts.dependencies import get_assessment_service
@@ -15,7 +17,11 @@ from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
 from app.domains.evaluations.dependencies import get_evaluation_service
-from app.domains.evaluations.pack import build_evaluation_pack
+from app.domains.evaluations.pack import (
+    EVALUATION_PACK_MAX,
+    EVALUATION_PACK_MAX_BYTES,
+    build_evaluation_pack,
+)
 from app.domains.evaluations.schemas import (
     ApplicationEvaluationOut,
     EvaluationImportIn,
@@ -43,6 +49,9 @@ router = APIRouter(
 @router.get("/export")
 async def export_evaluation_pack(
     job_post_id: uuid.UUID,
+    status: list[ApplicationStatus] | None = Query(
+        None, description="Restrict the pack to these pipeline statuses"
+    ),
     current_user: auth_entities.User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
@@ -50,17 +59,43 @@ async def export_evaluation_pack(
     job_post_service: JobPostService = Depends(get_job_post_service),
 ) -> Response:
     """ZIP for external AI evaluation: job spec + rubric + every applicant's
-    résumé and assessment answers."""
+    résumé and assessment answers. Bounded by applicant count and total bytes —
+    narrow with `?status=` when a job post is over the cap."""
     job = await job_post_service.get(job_post_id)
-    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
-    rows = (await db.execute(query)).all()
+    query = await service.list_for_review(
+        job_post_id=job_post_id,
+        statuses=[s.value for s in status] if status else None,
+    )
+    # Fetch one past the cap so an over-limit job post is a cheap 413, not a
+    # full table scan.
+    rows = (await db.execute(query.limit(EVALUATION_PACK_MAX + 1))).all()
+
+    if len(rows) > EVALUATION_PACK_MAX:
+        raise HTTPException(
+            status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"More than {EVALUATION_PACK_MAX} applicants match. Narrow with "
+                "?status=applied (repeatable) or split the export."
+            ),
+        )
 
     applicants: list[dict] = []
+    total_bytes = 0
     for row in rows:
         try:
             data, _content_type, filename = await service.get_resume(
                 row.id, current_user
             )
+            total_bytes += len(data)
+            if total_bytes > EVALUATION_PACK_MAX_BYTES:
+                raise HTTPException(
+                    status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        "The résumés for this set exceed the "
+                        f"{EVALUATION_PACK_MAX_BYTES // (1024 * 1024)} MiB export "
+                        "limit. Narrow with ?status=."
+                    ),
+                )
             resume = (data, filename)
         except ResumeUnavailableError:
             resume = None

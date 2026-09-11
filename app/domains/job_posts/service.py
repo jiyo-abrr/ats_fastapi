@@ -59,6 +59,37 @@ class JobPostService:
         self.technical_assessment_templates = technical_assessment_templates
         self.uow = uow
 
+    async def _assert_templates_have_questions(
+        self,
+        pre_assessment_template_id: uuid.UUID | None,
+        culture_fit_template_id: uuid.UUID | None,
+        technical_assessment_template_id: uuid.UUID | None,
+    ) -> None:
+        """A job post can't be published with an attached template that has no
+        questions — its applicants would get an attempt with nothing to answer
+        (review F22)."""
+        for repo, template_id, label in (
+            (
+                self.pre_assessment_templates,
+                pre_assessment_template_id,
+                "pre-assessment",
+            ),
+            (self.culture_fit_templates, culture_fit_template_id, "culture-fit"),
+            (
+                self.technical_assessment_templates,
+                technical_assessment_template_id,
+                "technical",
+            ),
+        ):
+            if template_id is None:
+                continue
+            template = await repo.get_by_id(template_id)
+            if template is not None and not template.questions:
+                raise JobPostAssessmentsIncompleteError(
+                    f"The attached {label} assessment has no questions — add "
+                    "questions before publishing"
+                )
+
     async def _require_position(
         self, position_id: uuid.UUID
     ) -> position_entities.Position:
@@ -80,6 +111,14 @@ class JobPostService:
     async def get(self, job_post_id: uuid.UUID) -> entities.JobPost:
         job_post = await self.job_posts.get_by_id(job_post_id)
         if job_post is None:
+            raise JobPostNotFoundError(f"Job post '{job_post_id}' not found")
+        return job_post
+
+    async def get_public(self, job_post_id: uuid.UUID) -> entities.JobPost:
+        """Public detail — a draft or closed post 404s rather than leaking that
+        it exists (docs/decisions/D01)."""
+        job_post = await self.get(job_post_id)
+        if job_post.status != JobPostStatus.PUBLISHED:
             raise JobPostNotFoundError(f"Job post '{job_post_id}' not found")
         return job_post
 
@@ -150,14 +189,20 @@ class JobPostService:
                 f"'{technical_assessment_template_id}' not found"
             )
 
-        if status == JobPostStatus.PUBLISHED and not (
-            pre_assessment_template_id
-            and culture_fit_template_id
-            and technical_assessment_template_id
-        ):
-            raise JobPostAssessmentsIncompleteError(
-                "A job post needs all three assessments (pre-assessment, culture fit, "
-                "technical) attached before it can be published"
+        if status == JobPostStatus.PUBLISHED:
+            if not (
+                pre_assessment_template_id
+                and culture_fit_template_id
+                and technical_assessment_template_id
+            ):
+                raise JobPostAssessmentsIncompleteError(
+                    "A job post needs all three assessments (pre-assessment, "
+                    "culture fit, technical) attached before it can be published"
+                )
+            await self._assert_templates_have_questions(
+                pre_assessment_template_id,
+                culture_fit_template_id,
+                technical_assessment_template_id,
             )
 
         job_post_id = uuid.uuid4()
@@ -223,14 +268,20 @@ class JobPostService:
         assessment_window_days: int = 4,
     ) -> entities.JobPost:
         existing = await self.get(job_post_id)
-        if status == JobPostStatus.PUBLISHED and not (
-            existing.pre_assessment_template_id
-            and existing.culture_fit_template_id
-            and existing.technical_assessment_template_id
-        ):
-            raise JobPostAssessmentsIncompleteError(
-                "A job post needs all three assessments (pre-assessment, culture fit, "
-                "technical) attached before it can be published"
+        if status == JobPostStatus.PUBLISHED:
+            if not (
+                existing.pre_assessment_template_id
+                and existing.culture_fit_template_id
+                and existing.technical_assessment_template_id
+            ):
+                raise JobPostAssessmentsIncompleteError(
+                    "A job post needs all three assessments (pre-assessment, "
+                    "culture fit, technical) attached before it can be published"
+                )
+            await self._assert_templates_have_questions(
+                existing.pre_assessment_template_id,
+                existing.culture_fit_template_id,
+                existing.technical_assessment_template_id,
             )
         address = await self._require_address(company_address_id)
         position = await self._require_position(position_id)

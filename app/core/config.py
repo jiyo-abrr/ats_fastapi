@@ -18,6 +18,23 @@ class Settings(BaseSettings):
 
     redis_url: str
 
+    # The in-process APScheduler sweep (expire attempts -> disqualify
+    # applications). With more than one web worker/replica this MUST be true on
+    # at most one of them, or every process runs the same sweep concurrently.
+    # Default off so multi-worker deployments are safe by default; a
+    # single-process dev run sets it true in .env. See docs/decisions/D06.
+    scheduler_enabled: bool = False
+    scheduler_interval_minutes: int = 15
+
+    # Bootstrap admin (used by `uv run python -m app.scripts.create_admin`).
+    # Declared here so setting them in .env actually takes effect —
+    # pydantic-settings does not export .env values into os.environ.
+    admin_email: str | None = None
+    admin_password: str | None = None
+    admin_first_name: str = "Admin"
+    admin_last_name: str = "User"
+    admin_contact_number: str = "N/A"
+
     # Comma-separated list of allowed CORS origins (e.g. "http://localhost:5173,http://192.168.1.59:5173")
     cors_allow_origins: str = "*"
 

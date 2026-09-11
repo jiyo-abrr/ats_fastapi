@@ -38,9 +38,9 @@ class ApplicationStatusUpdate(BaseModel):
 
 
 class ExtendAssessmentDeadlineRequest(BaseModel):
-    reason: str
+    reason: str = Field(min_length=1, max_length=1000)
     new_deadline: datetime | None = None
-    extend_by_days: int | None = None
+    extend_by_days: int | None = Field(default=None, ge=1, le=365)
 
     @model_validator(mode="after")
     def _exactly_one_of_new_deadline_or_extend_by_days(self):

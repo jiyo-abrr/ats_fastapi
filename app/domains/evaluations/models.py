@@ -1,7 +1,15 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -62,6 +70,12 @@ class ApplicationEvaluationScore(Base):
         CheckConstraint(
             "category IN ('resume', 'assessment')",
             name="ck_application_evaluation_scores_category",
+        ),
+        UniqueConstraint(
+            "evaluation_id",
+            "category",
+            "dimension",
+            name="uq_application_evaluation_scores_dimension",
         ),
         Index("ix_application_evaluation_scores_evaluation_id", "evaluation_id"),
     )

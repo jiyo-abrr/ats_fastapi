@@ -1,37 +1,39 @@
 import asyncio
-import os
 import selectors
 import sys
 import uuid
 from getpass import getpass
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.security import hash_password
 from app.domains.auth import entities
 from app.domains.auth.repository import UserRepository
 from app.domains.rbac.repository import RoleRepository
 
-# Seed defaults — used when ADMIN_EMAIL / ADMIN_PASSWORD aren't set and the
-# prompt is left blank. Fine for local/dev bootstrapping; override via env
-# (or .env) for anything real.
+# Seed defaults — used when ADMIN_EMAIL / ADMIN_PASSWORD aren't set (in the
+# environment or .env) and the prompt is left blank. Fine for local/dev
+# bootstrapping; set real values in .env for anything else.
 DEFAULT_ADMIN_EMAIL = "admin@example.com"
 DEFAULT_ADMIN_PASSWORD = "admin12345"
 
 
 async def main() -> None:
+    # settings reads both the process environment and .env (unlike os.environ,
+    # which never sees .env).
     email = (
-        os.environ.get("ADMIN_EMAIL")
+        settings.admin_email
         or input(f"Admin email [{DEFAULT_ADMIN_EMAIL}]: ").strip()
         or DEFAULT_ADMIN_EMAIL
     )
     password = (
-        os.environ.get("ADMIN_PASSWORD")
+        settings.admin_password
         or getpass(f"Admin password [{DEFAULT_ADMIN_PASSWORD}]: ")
         or DEFAULT_ADMIN_PASSWORD
     )
-    first_name = os.environ.get("ADMIN_FIRST_NAME", "Admin")
-    last_name = os.environ.get("ADMIN_LAST_NAME", "User")
-    contact_number = os.environ.get("ADMIN_CONTACT_NUMBER", "N/A")
+    first_name = settings.admin_first_name
+    last_name = settings.admin_last_name
+    contact_number = settings.admin_contact_number
 
     async with AsyncSessionLocal() as db:
         users = UserRepository(db)

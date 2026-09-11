@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
+from app.core.db_errors import violated_constraint
 from app.core.storage import ObjectNotFoundError, get_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications import entities
@@ -31,6 +32,10 @@ from app.domains.job_posts.enums import JobPostStatus
 from app.domains.job_posts.exceptions import JobPostNotFoundError
 from app.domains.job_posts.repository import JobPostRepository
 from app.domains.rbac.repository import RolePermissionRepository
+
+# The partial unique index enforcing one active application per applicant per
+# job post (see models.py). Only this violation is a DuplicateApplicationError.
+_ACTIVE_APPLICATION_INDEX = "ux_applications_active_per_job_post"
 
 # The forward-only transition graph (`ALLOWED_TRANSITIONS`) and the
 # `WITHDRAWABLE_STATUSES` set both now live in enums.py so schemas can read them
@@ -60,8 +65,19 @@ class ApplicationService:
         self.uow = uow
 
     async def create(
-        self, *, job_post_id: uuid.UUID, current_user: auth_entities.User
+        self,
+        *,
+        job_post_id: uuid.UUID,
+        current_user: auth_entities.User,
+        commit: bool = True,
     ) -> entities.Application:
+        """Stage (and by default commit) a new application.
+
+        `commit=False` flushes instead — the caller (the `apply_to_job` use
+        case) then stages the assessment attempts in the same transaction and
+        commits once, so an application never persists without its attempts.
+        The duplicate-active-application unique index is caught here either
+        way (a flush raises `IntegrityError` just like a commit)."""
         if current_user.role != "applicant":
             raise OnlyApplicantsCanApplyError("Only applicants can apply to job posts")
 
@@ -101,12 +117,18 @@ class ApplicationService:
             )
         )
         try:
-            await self.uow.commit()
-        except IntegrityError:
+            if commit:
+                await self.uow.commit()
+            else:
+                await self.uow.flush()
+        except IntegrityError as exc:
             await self.uow.rollback()
-            raise DuplicateApplicationError(
-                f"You already have an active application for job post '{job_post_id}'"
-            ) from None
+            if violated_constraint(exc) == _ACTIVE_APPLICATION_INDEX:
+                raise DuplicateApplicationError(
+                    f"You already have an active application for job post "
+                    f"'{job_post_id}'"
+                ) from None
+            raise
         return await self.applications.get_by_id(application_id)
 
     # Thin pass-throughs to the repository's projection queries — kept here
@@ -237,11 +259,34 @@ class ApplicationService:
                 f"status '{application.status}'"
             )
 
-        previous_deadline = application.assessment_deadline or datetime.now(UTC)
+        now = datetime.now(UTC)
+        previous_deadline = application.assessment_deadline or now
         if new_deadline is not None:
+            if new_deadline.tzinfo is None:
+                raise InvalidAssessmentDeadlineExtensionError(
+                    "new_deadline must include a timezone offset"
+                )
             computed_deadline = new_deadline
         else:
-            computed_deadline = previous_deadline + timedelta(days=extend_by_days)
+            if extend_by_days <= 0:
+                raise InvalidAssessmentDeadlineExtensionError(
+                    "extend_by_days must be a positive number of days"
+                )
+            # Add to the current deadline when it's still ahead; when it has
+            # already lapsed (the revive-a-disqualified-application case),
+            # count from now so a small extension isn't swallowed by a long-
+            # expired deadline.
+            base = max(previous_deadline, now)
+            computed_deadline = base + timedelta(days=extend_by_days)
+
+        # The result must actually give the applicant more time than they have
+        # right now — otherwise the "extension" is a silent no-op or a
+        # shortening.
+        if computed_deadline <= max(previous_deadline, now):
+            raise InvalidAssessmentDeadlineExtensionError(
+                "The new deadline must be later than the current deadline and "
+                "in the future"
+            )
 
         await self.applications.set_assessment_deadline(
             application_id, computed_deadline

@@ -113,6 +113,14 @@ class ApplicationRepository(
         result = await self.db.execute(query)
         return {row[0]: row[1] for row in result.all()}
 
+    async def job_post_has_applications(self, job_post_id: uuid.UUID) -> bool:
+        result = await self.db.execute(
+            select(ApplicationModel.id)
+            .where(ApplicationModel.job_post_id == job_post_id)
+            .limit(1)
+        )
+        return result.first() is not None
+
     async def has_any_application_for(
         self, applicant_id: uuid.UUID, job_post_id: uuid.UUID
     ) -> bool:

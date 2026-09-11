@@ -12,6 +12,7 @@ from app.domains.job_posts.dependencies import (
     get_job_post_repository,
     get_job_post_service,
 )
+from app.domains.job_posts.enums import JobPostStatus
 from app.domains.job_posts.models import JobPost as JobPostModel
 from app.domains.job_posts.repository import JobPostRepository
 from app.domains.job_posts.schemas import (
@@ -22,6 +23,8 @@ from app.domains.job_posts.schemas import (
 )
 from app.domains.job_posts.service import JobPostService
 from app.domains.rbac.dependencies import require_permission
+from app.use_cases.delete_job_post import DeleteJobPost
+from app.use_cases.dependencies import get_delete_job_post
 
 _manage_jobs = Depends(require_permission("manage_jobs"))
 
@@ -41,19 +44,35 @@ async def create_job_post(
     return await service.create(**payload.model_dump())
 
 
+def _eager(query):
+    # Eager-load company_address/position so repo.map_many's _to_entity call
+    # doesn't trigger a MissingGreenlet lazy-load on the paginated rows.
+    return query.options(
+        selectinload(JobPostModel.company_address),
+        selectinload(JobPostModel.position),
+    )
+
+
 @router.get("", response_model=Page[JobPostOut])
 async def list_job_posts(
     query=QueryBuilder(JobPostModel),
     db: AsyncSession = Depends(get_db),
     repo: JobPostRepository = Depends(get_job_post_repository),
 ) -> Page[JobPostOut]:
-    # Eager-load company_address/position so repo.map_many's _to_entity call
-    # doesn't trigger a MissingGreenlet lazy-load on the paginated rows.
-    query = query.options(
-        selectinload(JobPostModel.company_address),
-        selectinload(JobPostModel.position),
-    )
+    # Public listing — published only (docs/decisions/D01). Staff use
+    # GET /job-posts/manage for drafts and closed posts.
+    query = _eager(query).where(JobPostModel.status == JobPostStatus.PUBLISHED)
     return await apaginate(db, query, transformer=repo.map_many)
+
+
+@router.get("/manage", response_model=Page[JobPostOut], dependencies=[_manage_jobs])
+async def list_job_posts_for_management(
+    query=QueryBuilder(JobPostModel),
+    db: AsyncSession = Depends(get_db),
+    repo: JobPostRepository = Depends(get_job_post_repository),
+) -> Page[JobPostOut]:
+    """Every job post regardless of status — for HR/admin."""
+    return await apaginate(db, _eager(query), transformer=repo.map_many)
 
 
 @router.get("/stats", response_model=JobPostStatsOut, dependencies=[_manage_jobs])
@@ -63,12 +82,25 @@ async def job_post_stats(
     return JobPostStatsOut(**await service.stats())
 
 
+@router.get(
+    "/manage/{job_post_id}",
+    response_model=JobPostOut,
+    dependencies=[_manage_jobs],
+)
+async def get_job_post_for_management(
+    job_post_id: uuid.UUID,
+    service: JobPostService = Depends(get_job_post_service),
+) -> JobPostOut:
+    return await service.get(job_post_id)
+
+
 @router.get("/{job_post_id}", response_model=JobPostOut)
 async def get_job_post(
     job_post_id: uuid.UUID,
     service: JobPostService = Depends(get_job_post_service),
 ) -> JobPostOut:
-    return await service.get(job_post_id)
+    # Public — a draft or closed post 404s (docs/decisions/D01).
+    return await service.get_public(job_post_id)
 
 
 @router.put("/{job_post_id}", response_model=JobPostOut, dependencies=[_manage_jobs])
@@ -87,9 +119,11 @@ async def update_job_post(
 )
 async def delete_job_post(
     job_post_id: uuid.UUID,
-    service: JobPostService = Depends(get_job_post_service),
+    delete_use_case: DeleteJobPost = Depends(get_delete_job_post),
 ) -> None:
-    await service.delete(job_post_id)
+    # 409 if the post has applications — those records outlive the requisition
+    # (docs/decisions/D04). Close the post instead to stop new applications.
+    await delete_use_case.execute(job_post_id)
 
 
 @router.post(

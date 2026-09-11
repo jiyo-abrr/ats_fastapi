@@ -50,3 +50,22 @@ def test_decode_rejects_wrong_type():
 def test_decode_rejects_garbage():
     with pytest.raises(jwt.InvalidTokenError):
         decode_token("not-a-jwt", expected_type="access")
+
+
+def test_password_length_guard():
+    from app.core.security import password_exceeds_max_length
+
+    assert not password_exceeds_max_length("x" * 72)
+    assert password_exceeds_max_length("x" * 73)
+    # multibyte: 24 three-byte chars = 72 bytes ok, 25 = 75 bytes over
+    assert not password_exceeds_max_length("€" * 24)
+    assert password_exceeds_max_length("€" * 25)
+
+
+def test_verify_password_rejects_overlong_without_calling_bcrypt():
+    from app.core.security import hash_password, verify_password
+
+    stored = hash_password("correct horse")
+    assert verify_password("correct horse", stored)
+    # an overlong candidate must not raise, just fail
+    assert verify_password("x" * 200, stored) is False

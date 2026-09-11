@@ -41,3 +41,7 @@ class UnsupportedResumeTypeError(ValidationError):
 
 class ResumeTooLargeError(ValidationError):
     pass
+
+
+class PasswordTooLongError(ValidationError):
+    """Password exceeds bcrypt's 72-byte input limit."""

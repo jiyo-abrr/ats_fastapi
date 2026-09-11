@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit
+from app.core.uploads import read_upload_bounded
 from app.domains.auth import entities
 from app.domains.auth.dependencies import (
     get_auth_service,
@@ -29,7 +30,7 @@ from app.domains.auth.schemas import (
     UserOut,
     UserUpdateRequest,
 )
-from app.domains.auth.service import AuthService
+from app.domains.auth.service import MAX_RESUME_SIZE_BYTES, AuthService
 from app.domains.rbac.dependencies import require_permission
 from app.domains.rbac.models import Role as RoleModel
 
@@ -45,16 +46,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     dependencies=[Depends(rate_limit("signup", limit=5, window_seconds=60))],
 )
 async def signup(
-    first_name: str = Form(...),
-    middle_initial: str | None = Form(None),
-    last_name: str = Form(...),
-    contact_number: str = Form(...),
+    first_name: str = Form(..., min_length=1, max_length=100),
+    middle_initial: str | None = Form(None, max_length=1),
+    last_name: str = Form(..., min_length=1, max_length=100),
+    contact_number: str = Form(..., min_length=1, max_length=20),
     email: EmailStr = Form(...),
     password: str = Form(...),
     resume: UploadFile = File(...),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SignupResponse:
-    resume_bytes = await resume.read()
+    # Read with a hard cap so an oversized upload can't balloon memory before
+    # the service's own size check runs (a little slack over the limit lets the
+    # service return its friendlier ResumeTooLargeError for near-misses).
+    resume_bytes = await read_upload_bounded(resume, MAX_RESUME_SIZE_BYTES + 65536)
     return await auth_service.signup(
         first_name=first_name,
         middle_initial=middle_initial,

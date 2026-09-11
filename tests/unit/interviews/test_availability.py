@@ -32,10 +32,14 @@ def test_hhmm_roundtrip(text, minutes):
         assert _minutes_to_hhmm(minutes) == text
 
 
-@pytest.mark.parametrize("bad", ["9", "25:00", "09:60", "abc", ""])
+@pytest.mark.parametrize("bad", ["9", "25:00", "09:60", "abc", "", "24:01", "24:59"])
 def test_hhmm_rejects_garbage(bad):
     with pytest.raises(ValueError):
         _hhmm_to_minutes(bad)
+
+
+def test_hhmm_accepts_end_of_day_sentinel():
+    assert _hhmm_to_minutes("24:00") == 1440
 
 
 def test_window_validates_times():

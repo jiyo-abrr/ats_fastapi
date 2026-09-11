@@ -15,9 +15,7 @@ class TagService:
 
     async def create(self, *, name: str, description: str | None) -> entities.Tag:
         tag_id = uuid.uuid4()
-        await self.tags.add(
-            entities.Tag(id=tag_id, name=name, description=description)
-        )
+        await self.tags.add(entities.Tag(id=tag_id, name=name, description=description))
         await self.uow.commit()
         return await self.tags.get_by_id(tag_id)
 

@@ -6,6 +6,7 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.http_headers import content_disposition_attachment
 from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.schemas import (
@@ -38,6 +39,8 @@ from app.domains.evaluations.service import EvaluationService
 from app.domains.interviews.dependencies import get_interview_service
 from app.domains.interviews.scheduling_service import InterviewService
 from app.domains.rbac.dependencies import require_permission
+from app.use_cases.apply_to_job import ApplyToJob
+from app.use_cases.dependencies import get_apply_to_job
 
 _manage_applications = Depends(require_permission("manage_applications"))
 
@@ -48,21 +51,13 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 async def create_application(
     payload: ApplicationCreate,
     current_user: auth_entities.User = Depends(get_current_user),
-    service: ApplicationService = Depends(get_application_service),
-    assessment_service: AssessmentService = Depends(get_assessment_service),
+    apply_to_job: ApplyToJob = Depends(get_apply_to_job),
 ) -> ApplicationOut:
-    application = await service.create(
+    # One transaction owner: the use case stages the application AND its
+    # assessment attempts, then commits once. See app/use_cases/apply_to_job.py.
+    return await apply_to_job.execute(
         job_post_id=payload.job_post_id, current_user=current_user
     )
-    # Router-level composition, not a service-to-service dependency: creating
-    # an application's assessment attempts touches both applications and
-    # assessments, and those two domains can't depend on each other (assessments
-    # already depends on applications — see applications-status-pipeline.md's
-    # scheduler section for the same cycle problem, resolved the same way).
-    await assessment_service.create_attempts_for_application(
-        application.id, payload.job_post_id
-    )
-    return application
 
 
 @router.get("/me", response_model=Page[ApplicationSummaryOut])
@@ -77,7 +72,7 @@ async def list_my_applications(
 
     async def _transform(rows):
         interview_ids = [r.id for r in rows if r.status == ApplicationStatus.INTERVIEW]
-        pending = await interviews.pending_selection_application_ids(interview_ids)
+        pending = await interviews.applications_awaiting_slot_pick(interview_ids)
         out = []
         for r in rows:
             dto = ApplicationSummaryOut.model_validate(r)
@@ -239,7 +234,7 @@ async def download_resume(
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 

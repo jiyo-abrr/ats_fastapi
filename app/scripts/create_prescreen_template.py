@@ -42,9 +42,7 @@ QUESTIONS = [
 async def main() -> None:
     async with AsyncSessionLocal() as db:
         existing = await db.scalar(
-            select(PreAssessmentTemplate).where(
-                PreAssessmentTemplate.title == TITLE
-            )
+            select(PreAssessmentTemplate).where(PreAssessmentTemplate.title == TITLE)
         )
         if existing is not None:
             print(f"Template '{TITLE}' already exists ({existing.id}) — skipping.")

@@ -520,7 +520,10 @@ class AnalyticsRepository:
                 func.row_number()
                 .over(
                     partition_by=ApplicationEvaluation.application_id,
-                    order_by=ApplicationEvaluation.created_at.desc(),
+                    order_by=(
+                        ApplicationEvaluation.created_at.desc(),
+                        ApplicationEvaluation.id.desc(),
+                    ),
                 )
                 .label("rank"),
             )

@@ -17,7 +17,12 @@ def _hhmm_to_minutes(value: str) -> int:
         raise ValueError(f"'{value}' is not a HH:MM time") from exc
     if not (0 <= h <= 24 and 0 <= m < 60):
         raise ValueError(f"'{value}' is out of range")
-    return h * 60 + m
+    total = h * 60 + m
+    # 24:00 is the valid end-of-day sentinel; 24:01–24:59 are not real times
+    # and exceed the DB's end_minute <= 1440 constraint.
+    if total > 1440:
+        raise ValueError(f"'{value}' is past the end of the day (max 24:00)")
+    return total
 
 
 def _minutes_to_hhmm(value: int) -> str:
@@ -47,15 +52,18 @@ class InterviewRequestIn(BaseModel):
 
     @field_validator("slots")
     @classmethod
-    def _dedupe_and_check_future(
+    def _dedupe_and_require_future(
         cls, slots: list[InterviewSlotIn]
     ) -> list[InterviewSlotIn]:
+        now = datetime.now(UTC)
         seen: set[datetime] = set()
         unique: list[InterviewSlotIn] = []
         for slot in slots:
             when = slot.starts_at
             if when.tzinfo is None:
                 when = when.replace(tzinfo=UTC)
+            if when <= now:
+                raise ValueError(f"Interview slot '{when.isoformat()}' is in the past")
             if when in seen:
                 continue
             seen.add(when)

@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,6 +22,14 @@ from app.domains.auth import entities as auth_entities
 from app.domains.job_posts import entities as job_post_entities
 from app.domains.job_posts.enums import JobPostStatus
 from app.domains.job_posts.exceptions import JobPostNotFoundError
+
+
+def _integrity_error(constraint_name: str) -> IntegrityError:
+    """An IntegrityError shaped like psycopg's — with a discoverable
+    constraint name — so `violated_constraint()` can classify it."""
+    err = IntegrityError("stmt", {}, Exception("violation"))
+    err.orig = SimpleNamespace(diag=SimpleNamespace(constraint_name=constraint_name))
+    return err
 
 
 def make_service():
@@ -133,12 +142,21 @@ class TestCreate:
         service, applications, job_posts, role_permissions, uow = make_service()
         job_posts.get_by_id.return_value = make_job_post()
         applications.has_any_application_for.return_value = False
-        uow.commit.side_effect = IntegrityError("dup", None, None)
+        uow.commit.side_effect = _integrity_error("ux_applications_active_per_job_post")
 
         with pytest.raises(DuplicateApplicationError):
             await service.create(job_post_id=uuid.uuid4(), current_user=make_user())
 
         uow.rollback.assert_called_once()
+
+    async def test_unrelated_integrity_error_is_not_masked_as_duplicate(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        job_posts.get_by_id.return_value = make_job_post()
+        applications.has_any_application_for.return_value = False
+        uow.commit.side_effect = _integrity_error("some_other_fk_constraint")
+
+        with pytest.raises(IntegrityError):
+            await service.create(job_post_id=uuid.uuid4(), current_user=make_user())
 
     async def test_happy_path_snapshots_resume_sets_deadline_and_commits(self):
         service, applications, job_posts, role_permissions, uow = make_service()
@@ -312,9 +330,7 @@ class TestUpdateStatus:
         applications.get_by_id.return_value = application
 
         with pytest.raises(InvalidApplicationStatusTransitionError):
-            await service.update_status(
-                application.id, ApplicationStatus.DISQUALIFIED
-            )
+            await service.update_status(application.id, ApplicationStatus.DISQUALIFIED)
 
 
 class TestExtendAssessmentDeadline:
@@ -376,6 +392,55 @@ class TestExtendAssessmentDeadline:
         applications.update_status.assert_called_once_with(
             application.id, ApplicationStatus.APPLIED
         )
+
+    async def test_rejects_non_positive_extend_by_days(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(
+            status=ApplicationStatus.APPLIED,
+            assessment_deadline=datetime.now(UTC) + timedelta(days=2),
+        )
+        applications.get_by_id.return_value = application
+
+        for bad in (0, -3):
+            with pytest.raises(InvalidAssessmentDeadlineExtensionError):
+                await service.extend_assessment_deadline(
+                    application.id,
+                    new_deadline=None,
+                    extend_by_days=bad,
+                    reason="r",
+                    current_user=make_user(role="hr"),
+                )
+
+    async def test_rejects_new_deadline_that_does_not_extend(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        current = datetime.now(UTC) + timedelta(days=5)
+        application = make_application(
+            status=ApplicationStatus.APPLIED, assessment_deadline=current
+        )
+        applications.get_by_id.return_value = application
+
+        with pytest.raises(InvalidAssessmentDeadlineExtensionError):
+            await service.extend_assessment_deadline(
+                application.id,
+                new_deadline=current - timedelta(days=1),
+                extend_by_days=None,
+                reason="r",
+                current_user=make_user(role="hr"),
+            )
+
+    async def test_rejects_naive_absolute_deadline(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.APPLIED)
+        applications.get_by_id.return_value = application
+
+        with pytest.raises(InvalidAssessmentDeadlineExtensionError):
+            await service.extend_assessment_deadline(
+                application.id,
+                new_deadline=datetime.now() + timedelta(days=4),  # noqa: DTZ005
+                extend_by_days=None,
+                reason="r",
+                current_user=make_user(role="hr"),
+            )
 
     async def test_rejects_extension_for_decided_application(self):
         service, applications, job_posts, role_permissions, uow = make_service()
@@ -504,9 +569,7 @@ class TestGetResume:
             lambda bucket, key: (b"%PDF-1.4", "application/pdf"),
         )
 
-        data, content_type, filename = await service.get_resume(
-            application.id, user
-        )
+        data, content_type, filename = await service.get_resume(application.id, user)
 
         assert data == b"%PDF-1.4"
         assert content_type == "application/pdf"
@@ -524,9 +587,7 @@ class TestGetResume:
         def boom(bucket, key):
             raise ObjectNotFoundError("gone")
 
-        monkeypatch.setattr(
-            "app.domains.applications.service.get_object", boom
-        )
+        monkeypatch.setattr("app.domains.applications.service.get_object", boom)
 
         with pytest.raises(ResumeUnavailableError):
             await service.get_resume(application.id, user)

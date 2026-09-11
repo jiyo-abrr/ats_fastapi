@@ -1,7 +1,14 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+# Bounds mirror the DB column widths in models.py so an over-long value is a
+# 422 at the request boundary, not a database error mid-transaction.
+_Name = Annotated[str, Field(min_length=1, max_length=100)]
+_MiddleInitial = Annotated[str | None, Field(default=None, max_length=1)]
+_ContactNumber = Annotated[str, Field(min_length=1, max_length=20)]
 
 
 class UserOut(BaseModel):
@@ -25,19 +32,19 @@ class LoginRequest(BaseModel):
 
 
 class CreateHrAccountRequest(BaseModel):
-    first_name: str
-    middle_initial: str | None = None
-    last_name: str
-    contact_number: str
+    first_name: _Name
+    middle_initial: _MiddleInitial
+    last_name: _Name
+    contact_number: _ContactNumber
     email: EmailStr
     password: str
 
 
 class UserUpdateRequest(BaseModel):
-    first_name: str
-    middle_initial: str | None = None
-    last_name: str
-    contact_number: str
+    first_name: _Name
+    middle_initial: _MiddleInitial
+    last_name: _Name
+    contact_number: _ContactNumber
     email: EmailStr
 
 

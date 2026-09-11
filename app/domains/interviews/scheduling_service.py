@@ -18,6 +18,7 @@ from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
 from app.domains.interviews.availability_service import InterviewAvailabilityService
+from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
     InterviewApplicationNotFoundError,
@@ -189,9 +190,14 @@ class InterviewService:
                     InterviewRequest,
                     InterviewRequest.id == InterviewSlot.request_id,
                 )
+                .join(
+                    Application,
+                    Application.id == InterviewRequest.application_id,
+                )
                 .where(
                     InterviewSlot.selected_at.is_not(None),
                     InterviewSlot.request_id != request_id,
+                    Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
                 )
             )
         ).all()
@@ -217,12 +223,26 @@ class InterviewService:
         request, slots = loaded
         now = datetime.now(UTC)
 
+        # Idempotent re-confirmation: selecting the slot that is already the
+        # confirmed one is a no-op, even if that time is now in the past — the
+        # interview is booked, re-clicking must not fail or move it.
+        already = next((s for s in slots if s.selected_at is not None), None)
+        if already is not None and (
+            already.id == payload.slot_id
+            or (
+                payload.starts_at is not None and already.starts_at == payload.starts_at
+            )
+        ):
+            return self._to_out(request, slots)
+
         if payload.slot_id is not None:
             target = next((s for s in slots if s.id == payload.slot_id), None)
             if target is None:
                 raise SlotNotOnRequestError(
                     "That time slot is not part of this interview"
                 )
+            if target.starts_at <= now:
+                raise SlotUnavailableError("That time is in the past — pick another.")
             if await self._overlaps_confirmed(
                 request.id, target.starts_at, request.duration_minutes
             ):
@@ -230,7 +250,14 @@ class InterviewService:
                     "That time overlaps another confirmed interview — pick another."
                 )
         else:
-            # An open availability instant — must still be open right now.
+            # An open availability instant. Only allowed when HR did NOT
+            # hand-pick specific slots — a manual offer is restrictive.
+            if not request.self_scheduled:
+                raise SlotNotOnRequestError(
+                    "This interview offers specific times — choose one of them "
+                    "(slot_id), not an arbitrary time."
+                )
+            # ...and it must still be open right now.
             open_slots = await InterviewAvailabilityService(
                 self.db
             ).open_slots_for_application(application_id)
@@ -267,31 +294,30 @@ class InterviewService:
             ) from exc
         return await self.get_for_application(application_id)  # type: ignore[return-value]
 
-    async def pending_selection_application_ids(
+    async def applications_awaiting_slot_pick(
         self, application_ids: list[uuid.UUID]
     ) -> set[uuid.UUID]:
-        """Of the given applications, those that have an interview request with
-        no slot selected yet — for the "pick a time" nudge on the applicant's
-        list."""
+        """Of the given applications, those with an interview request whose time
+        is not confirmed yet — for the "pick a time" nudge on the applicant's
+        list. A self-scheduled request has zero slot rows until the candidate
+        books one, so this must NOT inner-join to slots (that would silently
+        drop exactly the requests that most need the nudge)."""
         if not application_ids:
             return set()
+        confirmed_request_ids = (
+            select(InterviewSlot.request_id)
+            .where(InterviewSlot.selected_at.is_not(None))
+            .scalar_subquery()
+        )
         rows = (
             await self.db.execute(
-                select(InterviewRequest.application_id, InterviewSlot.selected_at)
-                .join(
-                    InterviewSlot,
-                    InterviewSlot.request_id == InterviewRequest.id,
+                select(InterviewRequest.application_id).where(
+                    InterviewRequest.application_id.in_(application_ids),
+                    InterviewRequest.id.not_in(confirmed_request_ids),
                 )
-                .where(InterviewRequest.application_id.in_(application_ids))
             )
         ).all()
-        has_request: set[uuid.UUID] = set()
-        has_selection: set[uuid.UUID] = set()
-        for application_id, selected_at in rows:
-            has_request.add(application_id)
-            if selected_at is not None:
-                has_selection.add(application_id)
-        return has_request - has_selection
+        return {row[0] for row in rows}
 
     async def delete_request(self, application_id: uuid.UUID) -> None:
         await self.db.execute(
@@ -322,7 +348,10 @@ class InterviewService:
                     InterviewSlot,
                     InterviewSlot.request_id == InterviewRequest.id,
                 )
-                .where(Application.job_post_id == job_post_id)
+                .where(
+                    Application.job_post_id == job_post_id,
+                    Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
+                )
             )
         ).all()
         by_app: dict[uuid.UUID, InterviewStatusOut] = {}
@@ -359,7 +388,10 @@ class InterviewService:
             )
             .join(User, User.id == Application.applicant_id)
             .join(JobPost, JobPost.id == Application.job_post_id)
-            .where(InterviewSlot.selected_at.is_not(None))
+            .where(
+                InterviewSlot.selected_at.is_not(None),
+                Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
+            )
             .order_by(InterviewSlot.starts_at)
         )
 

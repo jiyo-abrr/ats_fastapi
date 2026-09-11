@@ -12,8 +12,11 @@ from app.domains.assessments.attempts.exceptions import (
     AssessmentAttemptAlreadyCompletedError,
     AssessmentAttemptExpiredError,
     AssessmentAttemptNotFoundError,
+    AssessmentDeadlinePassedError,
     InvalidAssessmentAttemptReopenError,
+    MissingAssessmentTemplateError,
     NotCurrentQuestionError,
+    ParentApplicationNotAcceptingAssessmentsError,
 )
 from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
 from app.domains.assessments.culture_fit_templates.repository import (
@@ -27,6 +30,19 @@ from app.domains.assessments.technical_assessment_templates.repository import (
 )
 from app.domains.auth import entities as auth_entities
 from app.domains.job_posts.repository import JobPostRepository
+
+# Parent-application statuses in which an assessment attempt may still be
+# started / answered. Everything else (withdrawn, denied, disqualified,
+# success, failed) is terminal or already-decided — the applicant keeps
+# read access to results but can't continue answering. See maintainability
+# review F05.
+_ASSESSMENT_ANSWERABLE_STATUSES = frozenset(
+    {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.PRESCREENING,
+        ApplicationStatus.INTERVIEW,
+    }
+)
 
 
 class AssessmentService:
@@ -53,9 +69,20 @@ class AssessmentService:
     async def _get_template(self, template_type: str, template_id: uuid.UUID):
         """Dispatches to whichever of the 3 template repositories owns this
         attempt's template — template_id alone is ambiguous without knowing
-        which of the 3 independent domains it belongs to."""
+        which of the 3 independent domains it belongs to. May return None if
+        the template was deleted after the attempt was created; callers that
+        need it to exist use `_require_template`."""
         repo = self._template_repos[TemplateType(template_type)]
         return await repo.get_by_id(template_id)
+
+    async def _require_template(self, template_type: str, template_id: uuid.UUID):
+        template = await self._get_template(template_type, template_id)
+        if template is None:
+            raise MissingAssessmentTemplateError(
+                f"The template for this attempt (type '{template_type}') no "
+                "longer exists — it was removed after the attempt was created"
+            )
+        return template
 
     async def _with_total_questions(
         self, attempt: entities.AssessmentAttempt
@@ -68,8 +95,15 @@ class AssessmentService:
         return attempt
 
     async def create_attempts_for_application(
-        self, application_id: uuid.UUID, job_post_id: uuid.UUID
+        self,
+        application_id: uuid.UUID,
+        job_post_id: uuid.UUID,
+        commit: bool = True,
     ) -> None:
+        """Stage one attempt per template the job post has attached.
+
+        `commit=False` leaves the transaction open for the `apply_to_job` use
+        case, which commits the application and its attempts together."""
         job_post = await self.job_posts.get_by_id(job_post_id)
         if job_post is None:
             return
@@ -90,7 +124,8 @@ class AssessmentService:
                     status=AttemptStatus.NOT_STARTED,
                 )
             )
-        await self.uow.commit()
+        if commit:
+            await self.uow.commit()
 
     async def _require_owned_attempt(
         self, attempt_id: uuid.UUID, current_user: auth_entities.User
@@ -106,6 +141,40 @@ class AssessmentService:
                 f"Assessment attempt '{attempt_id}' not found"
             )
         return attempt
+
+    @staticmethod
+    def _parent_is_answerable(application) -> bool:
+        try:
+            return ApplicationStatus(application.status) in (
+                _ASSESSMENT_ANSWERABLE_STATUSES
+            )
+        except ValueError:
+            return False
+
+    async def _require_answerable_parent(
+        self, attempt: entities.AssessmentAttempt
+    ) -> None:
+        """Gate every assessment *mutation* on the parent application still
+        being in a state that accepts assessment activity, and on the outer
+        deadline not having passed. Read paths (get_attempt_detail, the HR
+        review views) deliberately skip this."""
+        application = await self.applications.get_by_id(attempt.application_id)
+        if application is None:
+            raise AssessmentAttemptNotFoundError(
+                f"Assessment attempt '{attempt.id}' not found"
+            )
+        if not self._parent_is_answerable(application):
+            raise ParentApplicationNotAcceptingAssessmentsError(
+                f"This application is '{application.status}' — its assessments "
+                "can no longer be answered"
+            )
+        if (
+            application.assessment_deadline is not None
+            and datetime.now(UTC) > application.assessment_deadline
+        ):
+            raise AssessmentDeadlinePassedError(
+                "The assessment deadline for this application has passed"
+            )
 
     async def _check_and_apply_layer2_expiry(
         self, attempt: entities.AssessmentAttempt, template
@@ -157,7 +226,10 @@ class AssessmentService:
         current_user: auth_entities.User,
     ) -> entities.AssessmentAnswer:
         attempt = await self._require_owned_attempt(attempt_id, current_user)
-        template = await self._get_template(attempt.template_type, attempt.template_id)
+        await self._require_answerable_parent(attempt)
+        template = await self._require_template(
+            attempt.template_type, attempt.template_id
+        )
         now = datetime.now(UTC)
 
         if attempt.status == AttemptStatus.NOT_STARTED:
@@ -199,7 +271,10 @@ class AssessmentService:
         current_user: auth_entities.User,
     ) -> entities.AssessmentAttempt:
         attempt = await self._require_owned_attempt(attempt_id, current_user)
-        template = await self._get_template(attempt.template_type, attempt.template_id)
+        await self._require_answerable_parent(attempt)
+        template = await self._require_template(
+            attempt.template_type, attempt.template_id
+        )
         now = datetime.now(UTC)
         attempt = await self._check_and_apply_layer2_expiry(attempt, template)
 
@@ -265,6 +340,16 @@ class AssessmentService:
                 "Cannot reopen an attempt for an already-disqualified "
                 "application — extend the assessment deadline first"
             )
+        # Reopening a terminal/decided application (withdrawn, denied, success,
+        # failed) would produce an attempt the applicant can never continue —
+        # start/submit are gated by _require_answerable_parent. Block it here so
+        # the answers aren't superseded and the audit row isn't written for
+        # nothing (review F05, second pass).
+        if application is not None and not self._parent_is_answerable(application):
+            raise InvalidAssessmentAttemptReopenError(
+                f"Cannot reopen an attempt for an application that is "
+                f"'{application.status}'"
+            )
 
         now = datetime.now(UTC)
         await self.attempts.supersede_answers(attempt_id, now)
@@ -283,13 +368,38 @@ class AssessmentService:
         )
 
     async def expire_overdue_attempts(self) -> list[uuid.UUID]:
-        """Layer 2 sweep — called by the scheduled job, never a router."""
+        """Layer 2 sweep — called by the scheduled job, never a router.
+
+        Expires attempts past their template's overall timer, and *completes*
+        any still-in-progress attempt whose question sequence is fully
+        consumed (every question answered, or its own per-question timer
+        lapsed) — otherwise, with no overall timer, such an attempt would sit
+        `in_progress` forever and the applicant would be disqualified for a
+        test they actually finished (review F22).
+        """
         now = datetime.now(UTC)
         overdue = await self.attempts.find_overdue_in_progress_attempts(now)
+        expired_ids = {attempt.id for attempt in overdue}
         for attempt in overdue:
             await self.attempts.expire_attempt(attempt.id)
+
+        for attempt in await self.attempts.list_in_progress_attempts():
+            if attempt.id in expired_ids:
+                continue
+            template = await self._get_template(
+                attempt.template_type, attempt.template_id
+            )
+            if template is None:
+                continue
+            answers = await self.attempts.list_live_answers(attempt.id)
+            current, _ = self._compute_current_question(
+                template.questions, {a.question_id: a for a in answers}, now
+            )
+            if current is None:
+                await self.attempts.complete_attempt(attempt.id, now)
+
         await self.uow.commit()
-        return [attempt.id for attempt in overdue]
+        return list(expired_ids)
 
     async def is_application_fully_assessed(self, application_id: uuid.UUID) -> bool:
         """Called by the disqualification sweep — no attempts at all (a job
@@ -400,7 +510,9 @@ class AssessmentService:
         applies layer-2 expiry (that stays a side effect of start/submit);
         surfaces only the current question, matching the sequential rule."""
         attempt = await self._require_owned_attempt(attempt_id, current_user)
-        template = await self._get_template(attempt.template_type, attempt.template_id)
+        template = await self._require_template(
+            attempt.template_type, attempt.template_id
+        )
         now = datetime.now(UTC)
         answers = await self.attempts.list_live_answers(attempt_id)
         answers_by_question = {a.question_id: a for a in answers}

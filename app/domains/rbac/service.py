@@ -31,9 +31,7 @@ class RBACService:
                     id=role.id,
                     name=role.name,
                     description=role.description,
-                    permissions=[
-                        PermissionOut.model_validate(p) for p in permissions
-                    ],
+                    permissions=[PermissionOut.model_validate(p) for p in permissions],
                 )
             )
         return result

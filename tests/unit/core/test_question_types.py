@@ -25,6 +25,13 @@ class TestValidateQuestionConfig:
         with pytest.raises(InvalidQuestionConfigError):
             validate_question_config(QuestionType.RATING, {"min": 5, "max": 1})
 
+    def test_numeric_bounds_must_be_numbers_not_500(self):
+        # Second-review F10: a non-number bound used to raise TypeError.
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(QuestionType.NUMBER, {"min": "low", "max": 10})
+        with pytest.raises(InvalidQuestionConfigError):
+            validate_question_config(QuestionType.RATING, {"min": 1, "max": "high"})
+
     def test_text_accepts_no_config(self):
         validate_question_config(QuestionType.TEXT, None)
 
@@ -76,6 +83,14 @@ class TestValidateAnswerValue:
                 QuestionType.MULTIPLE_CHOICE,
                 {"options": ["A", "B", "C"], "min_selections": 2},
                 ["A"],
+            )
+
+    def test_multiple_choice_rejects_duplicate_selections(self):
+        with pytest.raises(InvalidAnswerValueError):
+            validate_answer_value(
+                QuestionType.MULTIPLE_CHOICE,
+                {"options": ["A", "B", "C"]},
+                ["A", "A"],
             )
 
     def test_boolean_rejects_non_bool(self):

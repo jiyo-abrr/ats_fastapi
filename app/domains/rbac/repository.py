@@ -17,14 +17,10 @@ class RoleRepository(BaseRepository[RoleModel, entities.Role, uuid.UUID]):
         return entities.Role(id=obj.id, name=obj.name, description=obj.description)
 
     def _to_model(self, entity: entities.Role) -> RoleModel:
-        return RoleModel(
-            id=entity.id, name=entity.name, description=entity.description
-        )
+        return RoleModel(id=entity.id, name=entity.name, description=entity.description)
 
     async def get_by_name(self, name: str) -> entities.Role | None:
-        result = await self.db.execute(
-            select(RoleModel).where(RoleModel.name == name)
-        )
+        result = await self.db.execute(select(RoleModel).where(RoleModel.name == name))
         obj = result.scalar_one_or_none()
         return await self._to_entity(obj) if obj is not None else None
 

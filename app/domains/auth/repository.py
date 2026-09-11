@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from app.core.repository import BaseRepository
@@ -105,3 +106,14 @@ class RevokedRefreshTokenRepository(
 
     async def is_revoked(self, jti: str) -> bool:
         return await self.get_by_id(jti) is not None
+
+    async def delete_expired(self, now: datetime) -> int:
+        """Drop denylist rows whose refresh token has already expired — an
+        expired token is rejected on its own merits, so the row is dead weight.
+        Returns the number removed."""
+        result = await self.db.execute(
+            delete(RevokedRefreshTokenModel).where(
+                RevokedRefreshTokenModel.expires_at < now
+            )
+        )
+        return result.rowcount or 0

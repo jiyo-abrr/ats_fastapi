@@ -134,6 +134,60 @@ class TestUpdatePublishGate:
         )
 
 
+class TestGetPublic:
+    async def test_published_post_is_returned(self):
+        service, job_posts = make_service()
+        job_posts.get_by_id.return_value = make_job_post(status=JobPostStatus.PUBLISHED)
+        jp = await service.get_public(uuid.uuid4())
+        assert jp.status == JobPostStatus.PUBLISHED
+
+    @pytest.mark.parametrize("hidden", [JobPostStatus.DRAFT, JobPostStatus.CLOSED])
+    async def test_draft_or_closed_post_404s_publicly(self, hidden):
+        from app.domains.job_posts.exceptions import JobPostNotFoundError
+
+        service, job_posts = make_service()
+        job_posts.get_by_id.return_value = make_job_post(status=hidden)
+        with pytest.raises(JobPostNotFoundError):
+            await service.get_public(uuid.uuid4())
+
+
+class TestEmptyTemplateGate:
+    async def test_rejects_publishing_with_a_question_less_template(self):
+        service, job_posts = make_service()
+        # all three attached, but the pre-assessment template has no questions
+        pre_id = uuid.uuid4()
+        job_posts.get_by_id.return_value = make_job_post(
+            pre_assessment_template_id=pre_id,
+            culture_fit_template_id=uuid.uuid4(),
+            technical_assessment_template_id=uuid.uuid4(),
+        )
+        service.pre_assessment_templates.get_by_id.return_value = AsyncMock(
+            questions=[]
+        )
+        service.culture_fit_templates.get_by_id.return_value = AsyncMock(
+            questions=[object()]
+        )
+        service.technical_assessment_templates.get_by_id.return_value = AsyncMock(
+            questions=[object()]
+        )
+
+        with pytest.raises(JobPostAssessmentsIncompleteError):
+            await service.update(
+                make_job_post().id,
+                job_title="x",
+                description="d",
+                requirements="r",
+                qualifications="q",
+                salary_min=None,
+                salary_max=None,
+                currency="PHP",
+                employment_type="full_time",
+                status=JobPostStatus.PUBLISHED,
+                company_address_id=uuid.uuid4(),
+                position_id=uuid.uuid4(),
+            )
+
+
 class TestDetachGuard:
     async def test_cannot_detach_from_published_job_post(self):
         service, job_posts = make_service()

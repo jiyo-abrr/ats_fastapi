@@ -131,6 +131,14 @@ class AssessmentAttemptRepository(
         obj.started_at = None
         obj.completed_at = None
 
+    async def list_in_progress_attempts(self) -> list[entities.AssessmentAttempt]:
+        result = await self.db.execute(
+            select(AssessmentAttemptModel).where(
+                AssessmentAttemptModel.status == "in_progress"
+            )
+        )
+        return [await self._to_entity(obj) for obj in result.scalars().all()]
+
     async def find_overdue_in_progress_attempts(
         self, now: datetime
     ) -> list[entities.AssessmentAttempt]:

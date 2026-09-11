@@ -71,7 +71,8 @@ def validate_question_config(question_type: str, config: dict | None) -> None:
         _non_negative_int(qtype, "max_length", cfg.get("max_length"))
 
     if qtype in (QuestionType.RATING, QuestionType.NUMBER):
-        min_value, max_value = cfg.get("min"), cfg.get("max")
+        min_value = _number_or_none(qtype, "min", cfg.get("min"))
+        max_value = _number_or_none(qtype, "max", cfg.get("max"))
         if min_value is not None and max_value is not None and min_value >= max_value:
             raise InvalidQuestionConfigError(
                 f"'{qtype}' config 'min' must be less than 'max'"
@@ -86,6 +87,14 @@ def validate_question_config(question_type: str, config: dict | None) -> None:
             raise InvalidQuestionConfigError(
                 "'date' config 'min_date' must be on or before 'max_date'"
             )
+
+
+def _number_or_none(qtype: str, key: str, value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise InvalidQuestionConfigError(f"'{qtype}' config '{key}' must be a number")
+    return value
 
 
 def _non_negative_int(qtype: str, key: str, value: Any) -> int | None:
@@ -138,13 +147,18 @@ def validate_answer_value(question_type: str, config: dict | None, value: Any) -
             raise InvalidAnswerValueError(
                 f"Answer must be a list of values from {options}"
             )
+        distinct = set(value)
+        if len(distinct) != len(value):
+            raise InvalidAnswerValueError("Answer contains duplicate selections")
         min_selections = cfg.get("min_selections") or 0
         max_selections = cfg.get("max_selections")
-        if len(value) < min_selections:
+        # Count *distinct* selections — a repeated option must not satisfy a
+        # minimum or dodge a maximum.
+        if len(distinct) < min_selections:
             raise InvalidAnswerValueError(
                 f"At least {min_selections} selection(s) required"
             )
-        if max_selections is not None and len(value) > max_selections:
+        if max_selections is not None and len(distinct) > max_selections:
             raise InvalidAnswerValueError(
                 f"At most {max_selections} selection(s) allowed"
             )
@@ -171,8 +185,9 @@ def validate_answer_value(question_type: str, config: dict | None, value: Any) -
             raise InvalidAnswerValueError(
                 "Answer must be a valid ISO date string"
             ) from None
-        min_date, max_date = cfg.get("min_date"), cfg.get("max_date")
-        if min_date is not None and parsed < date.fromisoformat(min_date):
+        min_date = _iso_date(cfg.get("min_date"))
+        max_date = _iso_date(cfg.get("max_date"))
+        if min_date is not None and parsed < min_date:
             raise InvalidAnswerValueError(f"Answer must be on or after {min_date}")
-        if max_date is not None and parsed > date.fromisoformat(max_date):
+        if max_date is not None and parsed > max_date:
             raise InvalidAnswerValueError(f"Answer must be on or before {max_date}")

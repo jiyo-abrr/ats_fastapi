@@ -1,6 +1,6 @@
 """One-off: create a culture-fit template with a fixed set of questions.
 
-    uv run python -m app.scripts.create_culture_fit_template
+uv run python -m app.scripts.create_culture_fit_template
 """
 
 import asyncio
@@ -19,8 +19,7 @@ TITLE = "Culture & Values Check"
 
 QUESTIONS = [
     (
-        "I'd rather ship something good this week than something perfect "
-        "next month.",
+        "I'd rather ship something good this week than something perfect next month.",
         "rating",
         {"min": 1, "max": 5},
         120,
@@ -39,8 +38,7 @@ QUESTIONS = [
         120,
     ),
     (
-        "What kind of team culture helps you do your best work, and what "
-        "drains you?",
+        "What kind of team culture helps you do your best work, and what drains you?",
         "long_text",
         {"max_length": 1000},
         None,

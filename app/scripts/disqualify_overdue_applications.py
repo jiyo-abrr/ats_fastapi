@@ -3,6 +3,7 @@ import selectors
 from datetime import UTC, datetime
 
 from app.core.database import AsyncSessionLocal
+from app.core.sweep_lock import sweep_advisory_lock
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.repository import ApplicationRepository
 from app.domains.applications.service import ApplicationService
@@ -28,7 +29,9 @@ from app.domains.rbac.repository import RolePermissionRepository
 # since assessments already depends on applications for application_id FKs).
 
 
-async def main() -> None:
+async def run() -> None:
+    """The sweep itself, with no lock — the scheduler composes this under one
+    shared advisory lock together with the expiry sweep."""
     async with AsyncSessionLocal() as db:
         uow = UnitOfWork(db)
         applications = ApplicationRepository(db)
@@ -60,6 +63,15 @@ async def main() -> None:
             f"Checked {len(overdue)} overdue application(s), "
             f"disqualified {disqualified_count}"
         )
+
+
+async def main() -> None:
+    """CLI / task-runner entry point — takes the shared sweep lock so a manual
+    run can't collide with a scheduler tick or the other script."""
+    async with AsyncSessionLocal() as lock_db, sweep_advisory_lock(lock_db) as acquired:
+        if not acquired:
+            return
+        await run()
 
 
 if __name__ == "__main__":

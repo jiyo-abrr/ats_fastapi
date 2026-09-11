@@ -21,9 +21,7 @@ class TestAllowedTransitionsFor:
 
 class TestCanWithdraw:
     def test_true_for_active_stages(self):
-        assert all(
-            can_withdraw(s) for s in ("applied", "prescreening", "interview")
-        )
+        assert all(can_withdraw(s) for s in ("applied", "prescreening", "interview"))
 
     def test_false_for_terminal_and_unknown(self):
         assert not any(

@@ -18,11 +18,24 @@ class TokenPayload:
     expires_at: datetime
 
 
+# bcrypt hard-rejects inputs longer than 72 bytes (it does not silently
+# truncate). Callers validate against this and surface a client error rather
+# than letting bcrypt raise mid-request. Multibyte characters count for more
+# than one byte, so this is a byte budget, not a character count.
+MAX_PASSWORD_BYTES = 72
+
+
+def password_exceeds_max_length(password: str) -> bool:
+    return len(password.encode("utf-8")) > MAX_PASSWORD_BYTES
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    if password_exceeds_max_length(password):
+        return False
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 

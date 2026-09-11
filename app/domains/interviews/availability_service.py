@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
+from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
     InterviewApplicationNotFoundError,
@@ -359,7 +360,11 @@ class InterviewAvailabilityService:
                 InterviewRequest,
                 InterviewRequest.id == InterviewSlot.request_id,
             )
-            .where(InterviewSlot.selected_at.is_not(None))
+            .join(Application, Application.id == InterviewRequest.application_id)
+            .where(
+                InterviewSlot.selected_at.is_not(None),
+                Application.status.not_in(INTERVIEW_RELEASED_APPLICATION_STATUSES),
+            )
         )
         if exclude_request_id is not None:
             stmt = stmt.where(InterviewSlot.request_id != exclude_request_id)
@@ -433,7 +438,10 @@ class InterviewAvailabilityService:
             )
 
         today_local = now.astimezone(tz).date()
-        out: list[OpenSlotOut] = []
+        # Overlapping windows / duplicate overrides can generate the same start
+        # instant more than once — key by start so each bookable time appears
+        # exactly once.
+        by_start: dict[datetime, OpenSlotOut] = {}
         for day_offset in range(config.horizon_days + 1):
             day = today_local + timedelta(days=day_offset)
             for start_minute, end_minute in windows_for(day):
@@ -451,11 +459,11 @@ class InterviewAvailabilityService:
                     cursor += step
                     if start_utc < earliest or overlaps_booked(start_utc):
                         continue
-                    out.append(
+                    by_start.setdefault(
+                        start_utc,
                         OpenSlotOut(
                             starts_at=start_utc,
                             ends_at=start_utc + timedelta(minutes=step),
-                        )
+                        ),
                     )
-        out.sort(key=lambda s: s.starts_at)
-        return out
+        return sorted(by_start.values(), key=lambda s: s.starts_at)

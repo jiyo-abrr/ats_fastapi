@@ -2,15 +2,18 @@ import os
 import uuid
 
 import jwt
+from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
+from app.core.db_errors import violated_constraint
 from app.core.security import (
     TokenPayload,
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
+    password_exceeds_max_length,
     verify_password,
 )
 from app.core.storage import upload_object
@@ -22,6 +25,7 @@ from app.domains.auth.exceptions import (
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     InvalidRoleForActionError,
+    PasswordTooLongError,
     ResumeTooLargeError,
     UnsupportedResumeTypeError,
     UserNotFoundError,
@@ -34,6 +38,9 @@ from app.domains.auth.schemas import (
     UserOut,
 )
 from app.domains.rbac.repository import RoleRepository
+
+# The unique index on users.email (see auth/models.py — index=True, unique=True).
+_EMAIL_UNIQUE_INDEX = "ix_users_email"
 
 ALLOWED_RESUME_EXTENSIONS = {".pdf", ".doc", ".docx"}
 MAX_RESUME_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -51,6 +58,39 @@ class AuthService:
         self.roles = roles
         self.revoked_tokens = revoked_tokens
         self.uow = uow
+
+    async def _commit_translating_email_conflict(self) -> None:
+        """Commit; a violation of the users-email unique index becomes
+        `EmailAlreadyRegisteredError` (closing the get_by_email/insert race).
+        Any *other* integrity failure is re-raised untouched."""
+        try:
+            await self.uow.commit()
+        except IntegrityError as exc:
+            await self.uow.rollback()
+            if violated_constraint(exc) == _EMAIL_UNIQUE_INDEX:
+                raise EmailAlreadyRegisteredError(
+                    "Email is already registered"
+                ) from None
+            raise
+
+    @staticmethod
+    def _validate_password(password: str) -> None:
+        if password_exceeds_max_length(password):
+            raise PasswordTooLongError(
+                "Password must be at most 72 bytes long "
+                "(shorter for passwords with non-ASCII characters)."
+            )
+
+    @staticmethod
+    async def _hash_password(password: str) -> str:
+        # bcrypt is CPU-bound and synchronous — offload it so a burst of
+        # signups/logins doesn't stall the event loop (same treatment MinIO
+        # uploads already get).
+        return await run_in_threadpool(hash_password, password)
+
+    @staticmethod
+    async def _verify_password(password: str, password_hash: str) -> bool:
+        return await run_in_threadpool(verify_password, password, password_hash)
 
     async def _require_role(self, name: str):
         role = await self.roles.get_by_name(name)
@@ -71,6 +111,7 @@ class AuthService:
         resume_content_type: str | None,
         resume_bytes: bytes,
     ) -> SignupResponse:
+        self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
             raise EmailAlreadyRegisteredError("Email is already registered")
 
@@ -106,13 +147,13 @@ class AuthService:
                 last_name=last_name,
                 contact_number=contact_number,
                 email=email,
-                password_hash=hash_password(password),
+                password_hash=await self._hash_password(password),
                 role_id=applicant_role.id,
                 role=applicant_role.name,
                 resume_object_key=object_key,
             )
         )
-        await self.uow.commit()
+        await self._commit_translating_email_conflict()
         user = await self.users.get_by_id(user_id)
 
         return SignupResponse(
@@ -131,6 +172,7 @@ class AuthService:
         email: str,
         password: str,
     ) -> UserOut:
+        self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
             raise EmailAlreadyRegisteredError("Email is already registered")
 
@@ -145,13 +187,13 @@ class AuthService:
                 last_name=last_name,
                 contact_number=contact_number,
                 email=email,
-                password_hash=hash_password(password),
+                password_hash=await self._hash_password(password),
                 role_id=hr_role.id,
                 role=hr_role.name,
                 resume_object_key=None,
             )
         )
-        await self.uow.commit()
+        await self._commit_translating_email_conflict()
         user = await self.users.get_by_id(user_id)
 
         return UserOut.model_validate(user)
@@ -185,7 +227,7 @@ class AuthService:
         user.contact_number = contact_number
         user.email = email
         await self.users.update(user)
-        await self.uow.commit()
+        await self._commit_translating_email_conflict()
         return UserOut.model_validate(await self.users.get_by_id(user_id))
 
     async def set_applicant_active(
@@ -205,7 +247,9 @@ class AuthService:
 
     async def login(self, email: str, password: str) -> TokenResponse:
         user = await self.users.get_by_email(email)
-        if user is None or not verify_password(password, user.password_hash):
+        if user is None or not await self._verify_password(
+            password, user.password_hash
+        ):
             raise InvalidCredentialsError("Invalid email or password")
         if not user.is_active:
             raise AccountDeactivatedError("This account has been deactivated")
