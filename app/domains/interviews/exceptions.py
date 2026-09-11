@@ -33,3 +33,7 @@ class InvalidAvailabilityWindowError(ValidationError):
 
 class UnknownInterviewerError(ValidationError):
     pass
+
+
+class UnknownCompanyAddressError(ValidationError):
+    """A `company_address_id` doesn't refer to an existing company address."""

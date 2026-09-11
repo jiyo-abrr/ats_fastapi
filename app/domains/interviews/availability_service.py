@@ -28,6 +28,7 @@ from app.domains.interviews.exceptions import (
     InterviewApplicationNotFoundError,
     InterviewJobPostNotFoundError,
     InvalidAvailabilityWindowError,
+    UnknownCompanyAddressError,
     UnknownInterviewerError,
 )
 from app.domains.interviews.schemas import (
@@ -43,7 +44,10 @@ from app.domains.interviews.schemas import (
     InterviewerOut,
     JobPostAvailabilityIn,
     JobPostAvailabilityOut,
+    LogisticsPresetIn,
+    LogisticsPresetOut,
     OpenSlotOut,
+    ResolvedAddressOut,
     _hhmm_to_minutes,
     _minutes_to_hhmm,
 )
@@ -64,6 +68,62 @@ class InterviewAvailabilityService:
             min_notice_hours=config.min_notice_hours,
             timezone=config.timezone,
         )
+
+    # -- logistics presets -------------------------------------------------
+
+    @staticmethod
+    def _format_address(addr) -> str:
+        parts = [addr.line1, addr.line2, addr.city, addr.state_province, addr.country]
+        return ", ".join(p for p in parts if p)
+
+    async def _presets_out(
+        self,
+        rows: list[entities.LogisticsPreset],
+    ) -> list[LogisticsPresetOut]:
+        # Resolved at read time (not snapshotted when the preset was saved) so
+        # an edited CompanyAddress — a corrected floor, a renamed building —
+        # shows up everywhere immediately.
+        linked_ids = {p.company_address_id for p in rows if p.company_address_id}
+        addresses = await self.availability.company_addresses_by_id(linked_ids)
+        out = []
+        for p in rows:
+            addr = addresses.get(p.company_address_id) if p.company_address_id else None
+            out.append(
+                LogisticsPresetOut(
+                    id=p.id,
+                    mode=p.mode,
+                    label=p.label,
+                    value=self._format_address(addr) if addr else (p.value or ""),
+                    company_address_id=p.company_address_id,
+                    address=ResolvedAddressOut.model_validate(addr) if addr else None,
+                )
+            )
+        return out
+
+    async def _replace_presets(
+        self,
+        job_post_id: uuid.UUID | None,
+        presets: list[LogisticsPresetIn],
+    ) -> None:
+        linked_ids = {p.company_address_id for p in presets if p.company_address_id}
+        valid = await self.availability.valid_company_address_ids(linked_ids)
+        for p in presets:
+            if p.company_address_id and p.company_address_id not in valid:
+                raise UnknownCompanyAddressError(
+                    f"Company address '{p.company_address_id}' does not exist"
+                )
+        entities_list = [
+            entities.LogisticsPreset(
+                id=uuid.uuid4(),
+                job_post_id=job_post_id,
+                mode=p.mode,
+                label=p.label,
+                value=p.value,
+                company_address_id=p.company_address_id,
+            )
+            for p in presets
+        ]
+        await self.availability.replace_logistics_presets(job_post_id, entities_list)
 
     # -- window rows -----------------------------------------------------
 
@@ -168,6 +228,9 @@ class InterviewAvailabilityService:
             config=self._config_out(config),
             windows=self._windows_out(await self.availability.windows(None)),
             overrides=self._overrides_out(await self.availability.overrides(None)),
+            logistics_presets=await self._presets_out(
+                await self.availability.logistics_presets(None)
+            ),
         )
 
     async def set_global(self, payload: GlobalAvailabilityIn) -> GlobalAvailabilityOut:
@@ -178,6 +241,7 @@ class InterviewAvailabilityService:
         config.timezone = payload.config.timezone
         await self.availability.save_config(config)
         await self._replace_windows(None, payload.windows)
+        await self._replace_presets(None, payload.logistics_presets)
         await self.uow.commit()
         return await self.get_global()
 
@@ -220,16 +284,34 @@ class InterviewAvailabilityService:
             for u in rows
         ]
 
+    @staticmethod
+    def _resolve_presets(
+        custom: list[entities.LogisticsPreset],
+        global_: list[entities.LogisticsPreset],
+    ) -> list[entities.LogisticsPreset]:
+        """Per-mode fallback: a job post overriding only its video links still
+        falls back to the global on-site addresses, and vice versa — mirrors
+        the per-mode granularity `InterviewScheduler`'s "Use default" already
+        offered before presets existed."""
+        custom_modes = {p.mode for p in custom}
+        return custom + [g for g in global_ if g.mode not in custom_modes]
+
     async def get_for_job_post(self, job_post_id: uuid.UUID) -> JobPostAvailabilityOut:
         await self._require_job_post(job_post_id)
         config = await self.availability.get_or_create_config()
         custom = await self.availability.windows(job_post_id)
         effective = custom if custom else await self.availability.windows(None)
+        custom_presets = await self.availability.logistics_presets(job_post_id)
+        global_presets = await self.availability.logistics_presets(None)
         return JobPostAvailabilityOut(
             uses_custom_windows=bool(custom),
             windows=self._windows_out(effective),
             interviewers=await self._interviewers(job_post_id),
             config=self._config_out(config),
+            uses_custom_logistics=bool(custom_presets),
+            logistics_presets=await self._presets_out(
+                self._resolve_presets(custom_presets, global_presets)
+            ),
         )
 
     async def set_for_job_post(
@@ -237,6 +319,7 @@ class InterviewAvailabilityService:
     ) -> JobPostAvailabilityOut:
         await self._require_job_post(job_post_id)
         await self._replace_windows(job_post_id, payload.windows)
+        await self._replace_presets(job_post_id, payload.logistics_presets)
 
         interviewer_ids = list(dict.fromkeys(payload.interviewer_ids or []))
         if interviewer_ids:
@@ -277,7 +360,7 @@ class InterviewAvailabilityService:
         step = duration or config.slot_minutes
         try:
             tz = ZoneInfo(config.timezone)
-        except ZoneInfoNotFoundError, ValueError:
+        except (ZoneInfoNotFoundError, ValueError):
             tz = UTC
 
         rules = await self._resolved_windows(application.job_post_id)

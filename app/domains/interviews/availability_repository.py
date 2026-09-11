@@ -18,11 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
+from app.domains.company_addresses.models import CompanyAddress
 from app.domains.interviews import entities
 from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.models import (
     InterviewAvailabilityRule,
     InterviewDateOverride,
+    InterviewLogisticsPreset,
     JobPostInterviewer,
 )
 from app.domains.interviews.models import InterviewConfig as InterviewConfigModel
@@ -67,6 +69,83 @@ class InterviewAvailabilityRepository:
         obj.horizon_days = config.horizon_days
         obj.min_notice_hours = config.min_notice_hours
         obj.timezone = config.timezone
+
+    # -- logistics presets --------------------------------------------------
+
+    @staticmethod
+    def _preset_to_entity(
+        obj: InterviewLogisticsPreset,
+    ) -> entities.LogisticsPreset:
+        return entities.LogisticsPreset(
+            id=obj.id,
+            job_post_id=obj.job_post_id,
+            mode=obj.mode,
+            label=obj.label,
+            value=obj.value,
+            company_address_id=obj.company_address_id,
+            created_at=obj.created_at,
+        )
+
+    async def logistics_presets(
+        self, job_post_id: uuid.UUID | None
+    ) -> list[entities.LogisticsPreset]:
+        stmt = select(InterviewLogisticsPreset).order_by(
+            InterviewLogisticsPreset.mode, InterviewLogisticsPreset.created_at
+        )
+        stmt = (
+            stmt.where(InterviewLogisticsPreset.job_post_id.is_(None))
+            if job_post_id is None
+            else stmt.where(InterviewLogisticsPreset.job_post_id == job_post_id)
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return [self._preset_to_entity(r) for r in rows]
+
+    async def replace_logistics_presets(
+        self,
+        job_post_id: uuid.UUID | None,
+        presets: list[entities.LogisticsPreset],
+    ) -> None:
+        clause = (
+            InterviewLogisticsPreset.job_post_id.is_(None)
+            if job_post_id is None
+            else InterviewLogisticsPreset.job_post_id == job_post_id
+        )
+        await self.db.execute(delete(InterviewLogisticsPreset).where(clause))
+        for preset in presets:
+            self.db.add(
+                InterviewLogisticsPreset(
+                    id=preset.id,
+                    job_post_id=job_post_id,
+                    mode=preset.mode,
+                    label=preset.label,
+                    value=preset.value,
+                    company_address_id=preset.company_address_id,
+                )
+            )
+
+    async def company_addresses_by_id(
+        self, ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, CompanyAddress]:
+        """Batch-resolve linked addresses for `_presets_out` — one query for
+        every preset on the page, not one per row."""
+        if not ids:
+            return {}
+        stmt = select(CompanyAddress).where(CompanyAddress.id.in_(ids))
+        rows = (await self.db.execute(stmt)).scalars().all()
+        return {r.id: r for r in rows}
+
+    async def valid_company_address_ids(self, ids: set[uuid.UUID]) -> set[uuid.UUID]:
+        if not ids:
+            return set()
+        return set(
+            (
+                await self.db.execute(
+                    select(CompanyAddress.id).where(CompanyAddress.id.in_(ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     # -- availability windows ---------------------------------------------
 

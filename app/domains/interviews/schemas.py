@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -8,6 +9,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.domains.interviews.enums import InterviewMode
 
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+class ResolvedAddressOut(BaseModel):
+    """A `company_addresses` row, read-only here — resolved at read time
+    wherever a logistics preset or a booked interview links to one, so a map
+    can be shown from its lat/long."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    label: str
+    line1: str
+    line2: str | None
+    city: str
+    state_province: str | None
+    postal_code: str | None
+    country: str
+    latitude: Decimal | None
+    longitude: Decimal | None
 
 
 def _hhmm_to_minutes(value: str) -> int:
@@ -39,6 +59,10 @@ class InterviewSlotIn(BaseModel):
 class InterviewRequestIn(BaseModel):
     mode: InterviewMode
     location_or_link: str | None = None
+    # On-site only: the company address `location_or_link` was filled in
+    # from (typically by picking a logistics preset) — purely additive, lets
+    # the candidate/HR views show a map. Cleared for any other mode.
+    company_address_id: uuid.UUID | None = None
     duration_minutes: int = Field(default=45, ge=5, le=480)
     notes: str | None = None
     # Empty = the candidate self-books from interview availability; non-empty =
@@ -49,6 +73,12 @@ class InterviewRequestIn(BaseModel):
     @classmethod
     def _blank_to_none(cls, v: object) -> object:
         return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _address_only_for_onsite(self) -> "InterviewRequestIn":
+        if self.mode != InterviewMode.ONSITE:
+            self.company_address_id = None
+        return self
 
     @field_validator("slots")
     @classmethod
@@ -101,6 +131,8 @@ class InterviewRequestOut(BaseModel):
     application_id: uuid.UUID
     mode: str
     location_or_link: str | None
+    company_address_id: uuid.UUID | None
+    address: ResolvedAddressOut | None = None
     duration_minutes: int
     notes: str | None
     self_scheduled: bool
@@ -172,6 +204,53 @@ class InterviewConfigOut(BaseModel):
     timezone: str
 
 
+class LogisticsPresetIn(BaseModel):
+    """A named, reusable video-call link or on-site address. An on-site preset
+    either links a saved `company_addresses` row (`company_address_id`) —
+    its formatted text is shown instead of `value` — or is typed free text,
+    same as a video preset."""
+
+    mode: Literal["video", "onsite"]
+    label: str = Field(min_length=1, max_length=100)
+    value: str | None = Field(default=None, max_length=500)
+    company_address_id: uuid.UUID | None = None
+
+    @field_validator("label")
+    @classmethod
+    def _strip_label(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _strip_or_none(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        v = v.strip()
+        return v or None
+
+    @model_validator(mode="after")
+    def _check(self) -> "LogisticsPresetIn":
+        if self.company_address_id is not None:
+            if self.mode != "onsite":
+                raise ValueError("only an on-site preset can link a company address")
+            self.value = None  # ignored in favor of the linked address
+        elif not self.value:
+            raise ValueError("a preset needs either a value or a linked address")
+        return self
+
+
+class LogisticsPresetOut(BaseModel):
+    id: uuid.UUID
+    mode: Literal["video", "onsite"]
+    label: str
+    value: str
+    company_address_id: uuid.UUID | None
+    address: ResolvedAddressOut | None = None
+
+
 class DateOverrideIn(BaseModel):
     """A single-day or date-range exception. ``is_unavailable`` blocks the days
     entirely; otherwise ``start``/``end`` (HH:MM) replace that day's weekly
@@ -213,12 +292,16 @@ class DateOverrideOut(BaseModel):
 class GlobalAvailabilityIn(BaseModel):
     config: InterviewConfigIn
     windows: list[AvailabilityWindowIn] = Field(default_factory=list, max_length=60)
+    logistics_presets: list[LogisticsPresetIn] = Field(
+        default_factory=list, max_length=40
+    )
 
 
 class GlobalAvailabilityOut(BaseModel):
     config: InterviewConfigOut
     windows: list[AvailabilityWindowOut]
     overrides: list[DateOverrideOut]
+    logistics_presets: list[LogisticsPresetOut]
 
 
 class DateOverridesIn(BaseModel):
@@ -232,6 +315,12 @@ class JobPostAvailabilityIn(BaseModel):
     # An empty windows list means "use the global calendar for this job post".
     windows: list[AvailabilityWindowIn] = Field(default_factory=list, max_length=60)
     interviewer_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    # An empty preset list (per mode) means "use the global presets for that
+    # mode" — same fallback rule as windows, but scoped per mode since a post
+    # may want to override only its video links, say, and not its addresses.
+    logistics_presets: list[LogisticsPresetIn] = Field(
+        default_factory=list, max_length=40
+    )
 
 
 class InterviewerOut(BaseModel):
@@ -246,6 +335,8 @@ class JobPostAvailabilityOut(BaseModel):
     windows: list[AvailabilityWindowOut]  # effective (custom if any, else global)
     interviewers: list[InterviewerOut]
     config: InterviewConfigOut
+    uses_custom_logistics: bool
+    logistics_presets: list[LogisticsPresetOut]  # effective, per mode
 
 
 class OpenSlotOut(BaseModel):

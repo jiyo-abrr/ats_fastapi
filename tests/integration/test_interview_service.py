@@ -172,6 +172,40 @@ async def test_reconfirming_the_same_slot_is_idempotent(db_session):
     assert first.selected_slot_id == second.selected_slot_id == slot_id
 
 
+async def test_reselecting_a_different_slot_replaces_the_confirmation(db_session):
+    """Regression: `ux_interview_slots_one_selected` is a partial unique
+    *index*, not a deferrable constraint — Postgres checks it per statement.
+    Clearing the old selection and setting the new one must not both land in
+    the DB with the new one visible before the old one is cleared, or this
+    (a candidate simply changing their mind about the time) fails with a
+    spurious "just taken" on every attempt, not just a real race."""
+    app, applicant, hr = await _interview_stage_application(db_session)
+    svc = _make_service(db_session)
+    slot_a = _future(days=2, hours=1)
+    slot_b = _future(days=2, hours=3)
+    request = await svc.set_request(
+        app.id,
+        InterviewRequestIn(
+            mode="video",
+            slots=[
+                InterviewSlotIn(starts_at=slot_a),
+                InterviewSlotIn(starts_at=slot_b),
+            ],
+        ),
+        created_by_user_id=hr.id,
+    )
+    id_a = next(s.id for s in request.slots if s.starts_at == slot_a)
+    id_b = next(s.id for s in request.slots if s.starts_at == slot_b)
+
+    await svc.select_slot(
+        app.id, SelectSlotIn(slot_id=id_a), selected_by_user_id=applicant.id
+    )
+    changed = await svc.select_slot(
+        app.id, SelectSlotIn(slot_id=id_b), selected_by_user_id=applicant.id
+    )
+    assert changed.selected_slot_id == id_b
+
+
 async def test_editing_duration_keeps_ends_at_in_sync(db_session):
     """review F03: editing an offer's duration must update every slot's
     ends_at too, or the DB-enforced non-overlap constraint would use a stale
@@ -194,3 +228,43 @@ async def test_editing_duration_keeps_ends_at_in_sync(db_session):
         created_by_user_id=hr.id,
     )
     assert updated.slots[0].ends_at == start + timedelta(minutes=90)
+
+
+async def test_ensure_default_request_auto_provisions_self_schedule(db_session):
+    """The candidate must have times to pick from the moment an application
+    enters the interview stage — no separate "open the interview" step."""
+    app, applicant, hr = await _interview_stage_application(db_session)
+    svc = _make_service(db_session)
+
+    request = await svc.ensure_default_request(app.id, created_by_user_id=hr.id)
+
+    assert request.mode == "video"
+    assert request.self_scheduled is True
+    assert request.slots == []
+    assert request.duration_minutes > 0
+
+
+async def test_ensure_default_request_is_a_noop_when_hr_already_set_one_up(
+    db_session,
+):
+    """HR hand-picking times before/while the status moves must not be
+    clobbered by the auto-provisioned default."""
+    app, applicant, hr = await _interview_stage_application(db_session)
+    svc = _make_service(db_session)
+    slot = _future(days=3)
+    manual = await svc.set_request(
+        app.id,
+        InterviewRequestIn(
+            mode="onsite",
+            location_or_link="HQ, 4F",
+            slots=[InterviewSlotIn(starts_at=slot)],
+        ),
+        created_by_user_id=hr.id,
+    )
+
+    result = await svc.ensure_default_request(app.id, created_by_user_id=hr.id)
+
+    assert result.id == manual.id
+    assert result.mode == "onsite"
+    assert result.self_scheduled is False
+    assert len(result.slots) == 1

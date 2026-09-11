@@ -57,3 +57,20 @@ def test_duration_bounds_enforced():
 def test_mode_must_be_known():
     with pytest.raises(ValidationError):
         _payload(mode="carrier-pigeon")
+
+
+def test_company_address_id_cleared_for_non_onsite_mode():
+    payload = _payload(
+        mode="video",
+        company_address_id="9c6b1c1a-2222-4444-8888-000000000000",
+    )
+    assert payload.company_address_id is None
+
+
+def test_company_address_id_kept_for_onsite_mode():
+    payload = _payload(
+        mode="onsite",
+        location_or_link="5F, Tower One",
+        company_address_id="9c6b1c1a-2222-4444-8888-000000000000",
+    )
+    assert str(payload.company_address_id) == "9c6b1c1a-2222-4444-8888-000000000000"

@@ -9,6 +9,7 @@ from app.domains.interviews.schemas import (
     DateOverridesIn,
     GlobalAvailabilityIn,
     InterviewConfigIn,
+    LogisticsPresetIn,
     _hhmm_to_minutes,
     _minutes_to_hhmm,
 )
@@ -65,6 +66,51 @@ def test_config_bounds():
 def test_global_payload_accepts_no_windows():
     payload = GlobalAvailabilityIn(config=_config(), windows=[])
     assert payload.windows == []
+
+
+def test_logistics_preset_rejects_blank_label_or_value():
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(mode="video", label="  ", value="https://meet.example.com")
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(mode="onsite", label="HQ", value="   ")
+
+
+def test_logistics_preset_rejects_unknown_mode():
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(mode="phone", label="Main line", value="+63 2 555 0100")
+
+
+def test_logistics_preset_strips_whitespace():
+    preset = LogisticsPresetIn(
+        mode="video", label="  Team A  ", value="  https://meet.example.com/a  "
+    )
+    assert preset.label == "Team A"
+    assert preset.value == "https://meet.example.com/a"
+
+
+def test_logistics_preset_rejects_bare_preset():
+    """Needs either a value or a linked address — not neither."""
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(mode="video", label="Team A")
+
+
+def test_logistics_preset_video_cannot_link_an_address():
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(
+            mode="video",
+            label="Team A",
+            company_address_id="9c6b1c1a-2222-4444-8888-000000000000",
+        )
+
+
+def test_logistics_preset_linked_address_ignores_typed_value():
+    preset = LogisticsPresetIn(
+        mode="onsite",
+        label="HQ",
+        value="stale text that should be dropped",
+        company_address_id="9c6b1c1a-2222-4444-8888-000000000000",
+    )
+    assert preset.value is None
 
 
 def test_blackout_override_defaults_end_date_and_clears_hours():

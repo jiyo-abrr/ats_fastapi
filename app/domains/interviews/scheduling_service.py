@@ -22,6 +22,7 @@ from app.domains.interviews.exceptions import (
     InterviewRequestNotFoundError,
     SlotNotOnRequestError,
     SlotUnavailableError,
+    UnknownCompanyAddressError,
 )
 from app.domains.interviews.repository import InterviewRepository
 from app.domains.interviews.schemas import (
@@ -29,6 +30,7 @@ from app.domains.interviews.schemas import (
     InterviewRequestOut,
     InterviewSlotOut,
     InterviewStatusOut,
+    ResolvedAddressOut,
     SelectSlotIn,
     UpcomingInterviewOut,
 )
@@ -58,14 +60,23 @@ class InterviewService:
             )
         return application
 
-    def _to_out(self, request: entities.InterviewRequest) -> InterviewRequestOut:
+    async def _to_out(self, request: entities.InterviewRequest) -> InterviewRequestOut:
         slots = request.slots or []
         selected = next((s for s in slots if s.selected_at is not None), None)
+        # Resolved at read time (see availability_service._presets_out for the
+        # same reasoning) so an edited CompanyAddress shows up immediately.
+        address = (
+            await self.interviews.get_company_address(request.company_address_id)
+            if request.company_address_id
+            else None
+        )
         return InterviewRequestOut(
             id=request.id,
             application_id=request.application_id,
             mode=request.mode,
             location_or_link=request.location_or_link,
+            company_address_id=request.company_address_id,
+            address=ResolvedAddressOut.model_validate(address) if address else None,
             duration_minutes=request.duration_minutes,
             notes=request.notes,
             self_scheduled=request.self_scheduled,
@@ -89,7 +100,33 @@ class InterviewService:
         request = await self.interviews.get_request_with_slots(application_id)
         if request is None:
             return None
-        return self._to_out(request)
+        return await self._to_out(request)
+
+    async def ensure_default_request(
+        self, application_id: uuid.UUID, *, created_by_user_id: uuid.UUID
+    ) -> InterviewRequestOut:
+        """Auto-provision a self-scheduled interview the instant an
+        application enters the interview stage, so the candidate has times to
+        pick from immediately — no separate "open the interview" step. A
+        no-op if a request already exists (HR may have set one up, with
+        hand-picked times, before moving the status). HR can still edit the
+        mode/link/duration afterward; that never resets the candidate's pick."""
+        existing = await self.get_for_application(application_id)
+        if existing is not None:
+            return existing
+        config = await self.availability.get_global()
+        return await self.set_request(
+            application_id,
+            InterviewRequestIn(
+                mode="video",
+                location_or_link=None,
+                company_address_id=None,
+                duration_minutes=config.config.slot_minutes,
+                notes=None,
+                slots=[],
+            ),
+            created_by_user_id=created_by_user_id,
+        )
 
     async def set_request(
         self,
@@ -99,6 +136,13 @@ class InterviewService:
         created_by_user_id: uuid.UUID,
     ) -> InterviewRequestOut:
         await self._require_application_in_interview(application_id)
+        if payload.company_address_id is not None:
+            if await self.interviews.get_company_address(
+                payload.company_address_id
+            ) is None:
+                raise UnknownCompanyAddressError(
+                    f"Company address '{payload.company_address_id}' does not exist"
+                )
         loaded = await self.interviews.get_request_with_slots(application_id)
 
         self_scheduled = not payload.slots
@@ -112,6 +156,7 @@ class InterviewService:
                     created_by_user_id=created_by_user_id,
                     mode=payload.mode,
                     location_or_link=payload.location_or_link,
+                    company_address_id=payload.company_address_id,
                     duration_minutes=payload.duration_minutes,
                     notes=payload.notes,
                     self_scheduled=self_scheduled,
@@ -127,6 +172,7 @@ class InterviewService:
                 request_id,
                 mode=payload.mode,
                 location_or_link=payload.location_or_link,
+                company_address_id=payload.company_address_id,
                 duration_minutes=payload.duration_minutes,
                 notes=payload.notes,
                 self_scheduled=self_scheduled,
@@ -189,7 +235,7 @@ class InterviewService:
                 payload.starts_at is not None and already.starts_at == payload.starts_at
             )
         ):
-            return self._to_out(request)
+            return await self._to_out(request)
 
         if payload.slot_id is not None:
             target = next((s for s in slots if s.id == payload.slot_id), None)

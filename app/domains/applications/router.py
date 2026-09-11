@@ -255,9 +255,19 @@ async def withdraw_application(
 async def update_application_status(
     application_id: uuid.UUID,
     payload: ApplicationStatusUpdate,
+    current_user: auth_entities.User = Depends(get_current_user),
     service: ApplicationService = Depends(get_application_service),
+    interviews: InterviewService = Depends(get_interview_service),
 ) -> ApplicationOut:
-    return await service.update_status(application_id, payload.status)
+    result = await service.update_status(application_id, payload.status)
+    if payload.status == ApplicationStatus.INTERVIEW:
+        # Auto-provision a self-scheduled interview so the candidate has times
+        # to pick from the moment they land in this stage — no separate "open
+        # the interview" step. No-op if HR already set one up.
+        await interviews.ensure_default_request(
+            application_id, created_by_user_id=current_user.id
+        )
+    return result
 
 
 @router.patch(

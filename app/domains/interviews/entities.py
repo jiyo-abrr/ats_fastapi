@@ -24,6 +24,22 @@ class InterviewConfig:
 
 
 @dataclass
+class LogisticsPreset:
+    """A named, reusable video-call link or on-site address. `job_post_id`
+    NULL is the global list."""
+
+    id: uuid.UUID
+    job_post_id: uuid.UUID | None
+    mode: str  # "video" | "onsite"
+    label: str
+    value: str | None = None
+    # On-site only: an optional link to a `company_addresses` row — see the
+    # model docstring for why `value` is ignored in favor of it when set.
+    company_address_id: uuid.UUID | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
 class AvailabilityWindow:
     id: uuid.UUID
     job_post_id: uuid.UUID | None
@@ -65,6 +81,7 @@ class InterviewRequest:
     duration_minutes: int
     self_scheduled: bool
     location_or_link: str | None = None
+    company_address_id: uuid.UUID | None = None
     notes: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -140,6 +140,58 @@ class InterviewDateOverride(Base):
     )
 
 
+class InterviewLogisticsPreset(Base):
+    """A named, reusable logistics value (a video-call link or an on-site
+    address) HR can drop into an interview's location field with one click.
+    `job_post_id` NULL is the global list; a set value is that job post's own
+    list, which fully replaces the global one *for its mode* when non-empty —
+    same scoping rule as `InterviewAvailabilityRule`. Phone has no presets
+    (there's nothing reusable to store)."""
+
+    __tablename__ = "interview_logistics_presets"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('video', 'onsite')",
+            name="ck_interview_logistics_presets_mode",
+        ),
+        CheckConstraint(
+            "company_address_id IS NULL OR mode = 'onsite'",
+            name="ck_interview_logistics_presets_address_mode",
+        ),
+        Index(
+            "ix_interview_logistics_presets_job_post_id",
+            "job_post_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_post_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("job_posts.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Free-typed text; ignored in favor of the linked address's formatted text
+    # when `company_address_id` is set (resolved at read time — see
+    # InterviewAvailabilityService._presets_out — so an edited CompanyAddress
+    # is reflected everywhere immediately, not just on presets saved after).
+    value: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # On-site only: an optional link to the company address book, so the map
+    # (from its lat/long) can be shown wherever this preset — or an interview
+    # booked from it — is displayed.
+    company_address_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("company_addresses.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class JobPostInterviewer(Base):
     """Staff listed as interviewers for a job post — shown to HR and the
     candidate, not used in slot generation."""
@@ -185,6 +237,10 @@ class InterviewRequest(Base):
             "duration_minutes > 0 AND duration_minutes <= 480",
             name="ck_interview_requests_duration",
         ),
+        CheckConstraint(
+            "company_address_id IS NULL OR mode = 'onsite'",
+            name="ck_interview_requests_address_mode",
+        ),
         Index("ux_interview_requests_application_id", "application_id", unique=True),
     )
 
@@ -201,6 +257,15 @@ class InterviewRequest(Base):
     )
     mode: Mapped[str] = mapped_column(String(10), nullable=False)
     location_or_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # On-site only, optional: the company address this interview's location
+    # was set from (typically by picking a logistics preset), so the
+    # candidate/HR views can show a map. `location_or_link` stays the
+    # free-typed text shown everywhere — this is purely additive.
+    company_address_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("company_addresses.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     duration_minutes: Mapped[int] = mapped_column(nullable=False, default=45)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     # True: the candidate self-books from interview availability. False: HR

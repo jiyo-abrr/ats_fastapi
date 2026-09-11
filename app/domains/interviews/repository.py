@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
+from app.domains.company_addresses.models import CompanyAddress
 from app.domains.interviews import entities
 from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.models import InterviewRequest as InterviewRequestModel
@@ -52,6 +53,7 @@ class InterviewRepository:
             created_by_user_id=obj.created_by_user_id,
             mode=obj.mode,
             location_or_link=obj.location_or_link,
+            company_address_id=obj.company_address_id,
             duration_minutes=obj.duration_minutes,
             notes=obj.notes,
             self_scheduled=obj.self_scheduled,
@@ -60,10 +62,16 @@ class InterviewRepository:
             slots=[InterviewRepository._slot_to_entity(s) for s in slots],
         )
 
-    # -- application (read-only, cross-domain — see module docstring) ---
+    # -- application / company address (read-only, cross-domain — see module
+    # docstring) --------------------------------------------------------
 
     async def get_application(self, application_id: uuid.UUID) -> Application | None:
         return await self.db.get(Application, application_id)
+
+    async def get_company_address(
+        self, address_id: uuid.UUID
+    ) -> CompanyAddress | None:
+        return await self.db.get(CompanyAddress, address_id)
 
     # -- request + slots ---------------------------------------------------
 
@@ -100,6 +108,7 @@ class InterviewRepository:
                 created_by_user_id=entity.created_by_user_id,
                 mode=entity.mode,
                 location_or_link=entity.location_or_link,
+                company_address_id=entity.company_address_id,
                 duration_minutes=entity.duration_minutes,
                 notes=entity.notes,
                 self_scheduled=entity.self_scheduled,
@@ -116,6 +125,7 @@ class InterviewRepository:
         *,
         mode: str,
         location_or_link: str | None,
+        company_address_id: uuid.UUID | None,
         duration_minutes: int,
         notes: str | None,
         self_scheduled: bool,
@@ -125,6 +135,7 @@ class InterviewRepository:
             return
         obj.mode = mode
         obj.location_or_link = location_or_link
+        obj.company_address_id = company_address_id
         obj.duration_minutes = duration_minutes
         obj.notes = notes
         obj.self_scheduled = self_scheduled
@@ -155,8 +166,26 @@ class InterviewRepository:
 
     async def sync_slot_selections(self, slots: list[entities.InterviewSlot]) -> None:
         """Writes `selected_at` for every given slot (the confirmed one gets
-        `now`, every other live slot on the request gets `None`)."""
-        for slot in slots:
+        `now`, every other live slot on the request gets `None`).
+
+        Clears the old selection and flushes it BEFORE setting the new one.
+        `ux_interview_slots_one_selected` is a partial unique *index*, not a
+        deferrable constraint, so Postgres checks it per-statement — if the
+        ORM's flush happens to emit the "set new slot to now" UPDATE before
+        the "clear old slot" one (SQLAlchemy does not preserve Python
+        assignment order across a flush), two rows briefly show as selected
+        for the same request and the commit fails with "just taken" even
+        though nothing was actually taken (review: candidate re-picking a
+        time hit this every time, not just on a real race)."""
+        to_clear = [s for s in slots if s.selected_at is None]
+        to_set = [s for s in slots if s.selected_at is not None]
+        for slot in to_clear:
+            obj = await self.db.get(InterviewSlotModel, slot.id)
+            if obj is not None:
+                obj.selected_at = None
+        if to_clear:
+            await self.db.flush()
+        for slot in to_set:
             obj = await self.db.get(InterviewSlotModel, slot.id)
             if obj is not None:
                 obj.selected_at = slot.selected_at
