@@ -44,7 +44,7 @@ class JobPost(Base):
     )
     job_title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(String(10000), nullable=False)
-    requirements: Mapped[str] = mapped_column(String(10000), nullable=False)
+    responsibilities: Mapped[str] = mapped_column(String(10000), nullable=False)
     qualifications: Mapped[str] = mapped_column(String(10000), nullable=False)
     salary_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     salary_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)

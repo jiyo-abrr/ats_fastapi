@@ -18,7 +18,7 @@ def _job():
         salary_min=80000,
         salary_max=120000,
         description="Build APIs.",
-        requirements="Python, Postgres.",
+        responsibilities="Python, Postgres.",
         qualifications="CS degree or equivalent.",
     )
 

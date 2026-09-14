@@ -67,7 +67,7 @@ RUBRIC_MD = """# Applicant evaluation rubric
 
 You are an expert technical recruiter. Score every applicant in this pack
 **against the specific role** described in `job/description.md` — its
-description, requirements, qualifications and responsibilities are the bar,
+description, responsibilities and qualifications are the bar,
 not a generic standard.
 
 ## 1. Calibrate to the role's seniority FIRST
@@ -217,7 +217,7 @@ PROMPT_MD = """# Paste this into ChatGPT (with this ZIP attached)
 You are an expert technical recruiter evaluating applicants for one job opening.
 
 I've uploaded a ZIP ("evaluation pack"). Unzip it and read EVERY file:
-- `job/description.md` — the role: description, requirements, qualifications, responsibilities. This is the bar. Score everyone against THIS role, not a generic standard.
+- `job/description.md` — the role: description, responsibilities, qualifications. This is the bar. Score everyone against THIS role, not a generic standard.
 - `evaluation-rubric.md` — the full rubric (authoritative if anything below is unclear).
 - `applicants/<n>-<name>/resume.pdf` (or `RESUME-NOT-AVAILABLE.txt`) — the résumé.
 - `applicants/<n>-<name>/assessments.md` — their answers to up to 3 assessments.
@@ -360,7 +360,7 @@ Applicants: {count}
 
 ```
 PROMPT.md                 Copy-paste instruction for ChatGPT (start here)
-job/description.md        The role: description, requirements, qualifications, responsibilities
+job/description.md        The role: description, responsibilities, qualifications
 evaluation-rubric.md      How to score applicants (feed this to the AI agent)
 RESULTS-FORMAT.md         The columns the agent must fill for re-import
 evaluation-template.csv   Pre-filled rows — fill the columns, import it back (CSV)
@@ -396,9 +396,9 @@ def _job_md(job: Any) -> str:
 
 {_html_to_text(job.description)}
 
-## Requirements
+## Responsibilities
 
-{_html_to_text(job.requirements)}
+{_html_to_text(job.responsibilities)}
 
 ## Qualifications
 

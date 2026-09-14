@@ -24,6 +24,18 @@ _EAGER_OPTIONS = (
 )
 
 
+def _format_address(address) -> str:
+    parts = [
+        address.line1,
+        address.line2,
+        address.city,
+        address.state_province,
+        address.postal_code,
+        address.country,
+    ]
+    return ", ".join(p for p in parts if p)
+
+
 class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID]):
     model = JobPostModel
 
@@ -41,7 +53,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             id=obj.id,
             job_title=obj.job_title,
             description=obj.description,
-            requirements=obj.requirements,
+            responsibilities=obj.responsibilities,
             qualifications=obj.qualifications,
             salary_min=obj.salary_min,
             salary_max=obj.salary_max,
@@ -50,6 +62,9 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             status=obj.status,
             company_address_id=obj.company_address_id,
             company_address_label=obj.company_address.label,
+            company_address_full=_format_address(obj.company_address),
+            company_address_latitude=obj.company_address.latitude,
+            company_address_longitude=obj.company_address.longitude,
             position_id=obj.position_id,
             position_title=obj.position.title,
             assessment_window_days=obj.assessment_window_days,
@@ -173,7 +188,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             id=entity.id,
             job_title=entity.job_title,
             description=entity.description,
-            requirements=entity.requirements,
+            responsibilities=entity.responsibilities,
             qualifications=entity.qualifications,
             salary_min=entity.salary_min,
             salary_max=entity.salary_max,
@@ -213,7 +228,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             return
         obj.job_title = entity.job_title
         obj.description = entity.description
-        obj.requirements = entity.requirements
+        obj.responsibilities = entity.responsibilities
         obj.qualifications = entity.qualifications
         obj.salary_min = entity.salary_min
         obj.salary_max = entity.salary_max

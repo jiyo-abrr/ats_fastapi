@@ -11,7 +11,7 @@ class JobPost:
     id: uuid.UUID
     job_title: str
     description: str
-    requirements: str
+    responsibilities: str
     qualifications: str
     salary_min: Decimal | None
     salary_max: Decimal | None
@@ -19,6 +19,9 @@ class JobPost:
     status: str
     company_address_id: uuid.UUID
     company_address_label: str
+    company_address_full: str
+    company_address_latitude: Decimal | None
+    company_address_longitude: Decimal | None
     position_id: uuid.UUID
     position_title: str
     currency: str = "PHP"

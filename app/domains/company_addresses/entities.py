@@ -18,3 +18,15 @@ class CompanyAddress:
     longitude: Decimal | None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @property
+    def full_address(self) -> str:
+        parts = [
+            self.line1,
+            self.line2,
+            self.city,
+            self.state_province,
+            self.postal_code,
+            self.country,
+        ]
+        return ", ".join(p for p in parts if p)

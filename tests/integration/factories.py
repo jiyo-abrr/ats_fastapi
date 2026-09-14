@@ -67,7 +67,7 @@ async def make_job_post(
         id=uuid.uuid4(),
         job_title=kw.get("job_title", "Engineer"),
         description="d",
-        requirements="r",
+        responsibilities="r",
         qualifications="q",
         employment_type="full_time",
         status=status,

@@ -407,7 +407,7 @@ async def seed(db) -> None:
             id=uuid.uuid4(),
             job_title=title,
             description=f"We are hiring a {title}. Join a small, fast-moving team.",
-            requirements=(
+            responsibilities=(
                 "- Strong fundamentals\n- Clear communication\n- Ownership mindset"
             ),
             qualifications=(

@@ -29,7 +29,7 @@ class _SalaryRangeMixin(BaseModel):
 class JobPostCreate(_SalaryRangeMixin):
     job_title: str
     description: str
-    requirements: str
+    responsibilities: str
     qualifications: str
     currency: Currency = Currency.PHP
     employment_type: EmploymentType
@@ -47,7 +47,7 @@ class JobPostCreate(_SalaryRangeMixin):
 class JobPostUpdate(_SalaryRangeMixin):
     job_title: str
     description: str
-    requirements: str
+    responsibilities: str
     qualifications: str
     currency: Currency = Currency.PHP
     employment_type: EmploymentType
@@ -70,7 +70,7 @@ class JobPostOut(BaseModel):
     id: uuid.UUID
     job_title: str
     description: str
-    requirements: str
+    responsibilities: str
     qualifications: str
     salary_min: Decimal | None
     salary_max: Decimal | None
@@ -79,6 +79,9 @@ class JobPostOut(BaseModel):
     status: str
     company_address_id: uuid.UUID
     company_address_label: str
+    company_address_full: str
+    company_address_latitude: Decimal | None
+    company_address_longitude: Decimal | None
     position_id: uuid.UUID
     position_title: str
     assessment_window_days: int
