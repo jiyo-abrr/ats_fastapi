@@ -64,3 +64,22 @@ jobs:
         # Integration tests self-skip if Postgres is unreachable; here it is up,
         # so they run.
         run: uv run pytest -q
+
+  airflow-dag-validation:
+    runs-on: ubuntu-latest
+    # Deliberately its own job, no dependency on lint/test's Postgres/Redis/
+    # RabbitMQ services or on this repo's own uv environment — Airflow must
+    # never become a dependency of the FastAPI app (decision 2b/2d,
+    # docs/plans/rabbitmq-airflow-migration.md). Runs the DAG import/shape
+    # check inside a real Airflow image, same command verified manually
+    # while building this migration (see that plan's "What's remaining").
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate assessment_sweep_dag.py against a real Airflow install
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/airflow/dags:/opt/airflow/dags:ro" \
+            -v "${{ github.workspace }}/airflow/validate_dags.py:/opt/airflow/validate_dags.py:ro" \
+            -e _PIP_ADDITIONAL_REQUIREMENTS=apache-airflow-providers-ssh \
+            apache/airflow:3.2.0-python3.12 \
+            bash -c "python /opt/airflow/validate_dags.py"

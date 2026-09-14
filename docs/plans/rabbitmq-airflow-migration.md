@@ -1,7 +1,7 @@
 # Migration plan — RabbitMQ (queueing) + Airflow (orchestration)
 
-Status: **Phases 0–3 code-complete and staged; cutover not flipped — see
-"What's remaining" below.** Companion to
+Status: **Phases 0–4 code-complete, committed and pushed; scheduler cutover
+(Phase 5) not flipped — see "What's remaining" below.** Companion to
 [docs/decisions/D06-scheduler-ownership.md](../decisions/D06-scheduler-ownership.md)
 (which already commits to "delete `app/core/scheduler.py`, the two sweep
 scripts become two Airflow tasks" as the known end state) and
@@ -62,52 +62,55 @@ mocked** — with one genuine bug found and fixed along the way.
    15s apart) — no crash loop. Stack torn down afterward
    (`docker compose -f docker-compose.airflow.yml down`) rather than left
    running.
+5. **The Phase 4 `dag_bag` check, automated in CI.** `airflow/validate_dags.py`
+   (new) runs the same checks as points 3–4 above and is wired into
+   `.github/workflows/ci.yml` as its own `airflow-dag-validation` job —
+   `docker run` against the real image, no Airflow dependency added to this
+   repo's own `pyproject.toml` (2b/2d), independent of the `lint`/`test`
+   jobs. Verified locally with the exact command CI runs, both the pass
+   case and — deliberately breaking the DAG's dependency edge to check the
+   checker itself — the fail case (exit 1, itemized reasons).
+6. [`docs/decisions/D10-queue-orchestration-technology.md`](../decisions/D10-queue-orchestration-technology.md)
+   — the coherent ADR recording the RabbitMQ/FastStream choice, the
+   `AckPolicy` correction, and the SSH-vs-Docker-socket call for Airflow
+   task invocation.
 
 **Still remaining — genuinely different work now, not blocked on Docker:**
-5. **The Phase 4 `dag_bag` CI test** — the manual verification above proved
-   the DAG *can* be checked this way; wiring it into an actual CI job (its
-   own Airflow dependency group, separate from this repo's — decision
-   2b/2d) is still to do.
-6. **Phase 5's staged parallel-run verification** — run the Airflow DAG
+7. **Phase 5's staged parallel-run verification** — run the Airflow DAG
    *and* `SCHEDULER_ENABLED` side by side for one full sweep cycle in a
    non-prod environment, diff the *business outcomes* (same applications
    disqualified, same attempts expired). What's proven so far is that the
-   DAG mechanically works (parses, schedules, and — per point 1's pattern —
-   the underlying `ats-cli sweep` commands work standalone); what's **not**
-   proven is a live `SSHOperator` task actually reaching the app host and
-   producing correct results end-to-end, since that needs the real SSH
-   provisioning in point 8 below.
-7. Delete `app/core/scheduler.py`, its `main.py` lifespan calls, and
+   DAG mechanically works (parses, schedules, validates in CI, and — per
+   point 1's pattern — the underlying `ats-cli sweep` commands work
+   standalone); what's **not** proven is a live `SSHOperator` task actually
+   reaching the app host and producing correct results end-to-end, since
+   that needs the real SSH provisioning in point 10 below.
+8. Delete `app/core/scheduler.py`, its `main.py` lifespan calls, and
    `scheduler_enabled`/`scheduler_interval_minutes` from `Settings` —
-   deliberately still not done; gated on point 6, not on Docker anymore.
-8. `uv remove apscheduler` — same gate as point 7.
-9. Update `docs/decisions/D06-scheduler-ownership.md` with a final
-   "implemented" note — same gate as point 7.
+   deliberately still not done; gated on point 7, not on Docker anymore.
+9. `uv remove apscheduler` — same gate as point 8.
+10. Update `docs/decisions/D06-scheduler-ownership.md` with a final
+    "implemented" note — same gate as point 8.
 
 **Not code at all — real deploy-environment setup, whenever this actually
 gets deployed:**
-10. The app-host SSH user/key the plan's `SSHOperator` approach needs
+11. The app-host SSH user/key the plan's `SSHOperator` approach needs
     (`authorized_keys` `command=`-pinned to `docker compose run --rm app ...`,
     or equivalent), the matching Airflow `Connection`, and the
     `ats_app_dir` Airflow `Variable`. All documented as prerequisites in
     `airflow/dags/assessment_sweep_dag.py`'s own module docstring; none of
-    it is something a coding session can provision. This is what point 6
+    it is something a coding session can provision. This is what point 7
     is actually waiting on now — not Docker, not code.
 
-**Done:**
-11. [`docs/decisions/D10-queue-orchestration-technology.md`](../decisions/D10-queue-orchestration-technology.md)
-    — the coherent ADR recording the RabbitMQ/FastStream choice, the
-    `AckPolicy` correction, and the SSH-vs-Docker-socket call for Airflow
-    task invocation.
-
-Everything else — Phases 0–3's actual code (RabbitMQ client library,
-`app/core/queue.py`, the FastStream worker, `app/cli.py`, the DAG file, all
-associated tests, CI service containers, README/CLAUDE.md updates) — is
-done, staged (not committed), and now verified for real: imports clean,
-`ruff check`/`ruff format --check` clean (aside from 3 pre-existing
-unrelated files), full unit suite green, and — as of this session — the
-full integration suite green against a real Postgres too (303 tests, no
-skips) plus the live RabbitMQ/Airflow checks described above.
+Everything else — Phases 0–4's actual code (RabbitMQ client library,
+`app/core/queue.py`, the FastStream worker, `app/cli.py`, the DAG file, the
+`airflow-dag-validation` CI job, all associated tests, README/CLAUDE.md
+updates) — is done, **committed and pushed** (`6111a60` on
+`infra/rabbitmq-airflow-migration`, confirmed live on GitHub), and verified
+for real: imports clean, `ruff check`/`ruff format --check` clean (aside
+from 3 pre-existing unrelated files), full unit suite green, and — as of
+this session — the full integration suite green against a real Postgres too
+(303 tests, no skips) plus the live RabbitMQ/Airflow checks described above.
 
 ## 1. What's moving, and why
 
@@ -480,17 +483,19 @@ negligible extra DAG complexity.
 - **RabbitMQ:** integration test publishing/consuming against the real CI
   broker (Phase 1); FastStream's `TestRabbitBroker` for fast unit-level
   coverage of the publish call and the consumer's message handling.
-- **Airflow — behavior proven manually, CI automation still to do.** The
-  exact checks a `dag_bag` test would make (zero import errors, the 3-task
-  count, the `expire_attempts_task >> disqualify_applications_task` edge
-  independent of `purge_expired_tokens_task`) were all run manually inside a
-  real `apache/airflow:3.2.0-python3.12` container — see "What's remaining"
-  at the top. Turning that into an actual automated `dag_bag` test with its
-  **own** dependency group (separate from this repo's
-  `dependencies`/`dependency-groups.dev` — Airflow must not become a
-  dependency of the FastAPI app itself, per 2b/2d) and its own CI job is
-  still to do, but is now "wire up automation for a known-working check,"
-  not "verify this works at all."
+- **Airflow — done ✅, automated in CI.** `airflow/validate_dags.py` runs
+  the exact checks the manual verification did (zero import errors, the
+  3-task count, the `expire_attempts_task >> disqualify_applications_task`
+  edge independent of `purge_expired_tokens_task`), and is wired into
+  `.github/workflows/ci.yml` as its own `airflow-dag-validation` job —
+  `docker run` against the real `apache/airflow:3.2.0-python3.12` image
+  (no dependency group added to this repo's own `pyproject.toml`; Airflow
+  never becomes a dependency of the FastAPI app itself, per 2b/2d), no
+  running scheduler/webserver needed, independent of the `lint`/`test`
+  jobs' services. Verified locally with the exact command CI runs: passes
+  cleanly against the real DAG (`DAG_VALIDATION_OK`), and — sanity-checked
+  the checker itself — correctly fails (exit 1, itemized reasons) when the
+  task dependency edge is deliberately reversed.
 - **CLI — done.** `tests/unit/test_cli.py` (Typer's `CliRunner`, same shape
   as FastAPI's `TestClient`) — 6 tests covering all three `sweep` commands:
   `--json` output shape, exit 0 on a plain success, the "skipped" message
