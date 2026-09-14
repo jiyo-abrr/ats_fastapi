@@ -29,6 +29,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Airflow 3's own default auth manager (SimpleAuthManager) doesn't
+    # implement `find_role`, which `airflow users create` (from
+    # apache-airflow-providers-fab) needs — without this, airflow-init's
+    # user-creation step fails with `AttributeError:
+    # 'AirflowSecurityManagerV2' object has no attribute 'find_role'`
+    # (found and fixed while verifying this migration — see
+    # docs/plans/rabbitmq-airflow-migration.md's "What's remaining").
+    # Explicitly selecting the FAB auth manager restores it.
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     # apache-airflow-providers-ssh — the SSHOperator the sweep DAG needs
     # (Phase 3). Fine for local dev via _PIP_ADDITIONAL_REQUIREMENTS; bake
     # into a custom image (FROM apache/airflow:3.2.0-python3.12 + a

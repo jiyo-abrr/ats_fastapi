@@ -39,15 +39,19 @@ mocked** — with one genuine bug found and fixed along the way.
    confirmed working (`airflow db migrate` ran and actually created the
    metadata DB's tables) against a real `apache/airflow:3.2.0-python3.12`
    pull. Documented in the compose file itself so nobody reintroduces it.
-   One smaller, separate issue found and **not** fixed yet: `airflow users
-   create` throws `AttributeError: 'AirflowSecurityManagerV2' object has no
-   attribute 'find_role'` — an Airflow-3.x auth-manager compatibility issue
-   with the FAB `users create` CLI command, unrelated to this migration's
-   own code (harmless today — the compose command already wraps it in
-   `|| true`, so `airflow-init` still succeeds overall; it just means no
-   admin user gets created automatically yet). Needs
-   `AIRFLOW__CORE__AUTH_MANAGER` set explicitly or a different
-   user-bootstrap approach — tracked, not blocking.
+   A second, separate issue found — **and now fixed too**: `airflow users
+   create` initially threw `AttributeError: 'AirflowSecurityManagerV2'
+   object has no attribute 'find_role'`. Root cause: Airflow 3's own default
+   auth manager (`SimpleAuthManager`) doesn't implement `find_role`, which
+   the FAB provider's `users create` command needs. Fix: set
+   `AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager`
+   explicitly in `docker-compose.airflow.yml` — confirmed working end to
+   end: `airflow-init` now prints `User "admin" created with role "Admin"`,
+   and with the full stack up (`airflow-api-server` +
+   `airflow-scheduler` + `airflow-dag-processor`), `GET
+   /api/v2/monitor/health` returns 200 and `POST /auth/token` with
+   `admin`/`admin` returns a real JWT — a genuine login, not just a
+   container that didn't crash.
 3. **`airflow/dags/assessment_sweep_dag.py` imports cleanly and the
    dependency graph is exactly as designed**, checked directly inside the
    real container: `dag.dag_id == "assessment_sweep"`, all 3 tasks present
