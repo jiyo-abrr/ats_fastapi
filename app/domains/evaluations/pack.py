@@ -18,6 +18,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from app.core.csv_safe import csv_safe
+from app.domains.evaluations.dimensions import LOCATION_FORMAT_HINT
 
 # Bounds on one evaluation pack (review F09/F26, decision D05). Over either, the
 # route returns 413; a background-job path is the follow-up.
@@ -107,6 +108,13 @@ Rate each **Strong / Qualified / Below bar / N/A** with a one-line reason.
 Remember the seniority calibration in section 1 when applying dimensions
 2, 3, 4, 6 and 8.
 
+## 2b. Applicant location
+
+Also record the applicant's **location** — not rated, just recorded — as
+{LOCATION_FORMAT_HINT} This is a plain field (like the seniority you
+inferred), not one of the 9 rated dimensions above. Keeping the format
+consistent lets the ATS group applicants by location later.
+
 ## 3. Assessment dimensions
 
 Each applicant folder has `assessments.md` with their answers to up to three
@@ -152,6 +160,7 @@ The ATS imports **CSV** (Compare tab → "Import evaluation results"). Start fro
 | `application_id` | keep exactly as given — identifies the applicant |
 | `applicant_name` | keep as given (reference only) |
 | `seniority_assessed` | the level you inferred (e.g. `Mid`) |
+| `location` | the applicant's location, standardized: {LOCATION_FORMAT_HINT} |
 | `fit_score` | integer 0–100, calibrated to seniority |
 | `recommendation` | `advance` \\| `hold` \\| `reject` |
 | `summary` | 2–3 sentences, role-tied (quote it if it contains commas) |
@@ -180,6 +189,7 @@ A richer JSON form (with a `reason` per dimension) is also accepted — see
     {
       "application_id": "<uuid>",     // keep as-is; identifies the applicant
       "seniority_assessed": "Mid",    // level you inferred
+      "location": "Quezon City, Metro Manila",  // standardized, see below
       "fit_score": 78,                // 0-100, calibrated to seniority
       "recommendation": "advance",    // advance | hold | reject
       "summary": "2-3 sentences, role-tied.",
@@ -206,6 +216,7 @@ A richer JSON form (with a `reason` per dimension) is also accepted — see
 
 - `rating`: one of `strong`, `qualified`, `below_bar`, `na`.
 - `recommendation`: one of `advance`, `hold`, `reject`.
+- `location`: standardized, {LOCATION_FORMAT_HINT}
 - Keep the 9 résumé dimensions above (add more only if useful — unknown
   dimensions are still stored). Assessment dimensions: `pre_assessment`,
   `culture_fit`, `technical`.
@@ -245,6 +256,9 @@ Infer the seniority level from the job title + responsibilities: Intern / Junior
 
 Apply the Step 1 calibration when scoring dimensions 2, 3, 4, 6, and 8.
 
+Also record (not rated) the applicant's **location**, standardized as
+{LOCATION_FORMAT_HINT}
+
 ## Step 3 — Assessments (rate each: strong / qualified / below_bar / na)
 
 For each of `pre_assessment`, `culture_fit`, `technical` that has answers, judge: completion (finished vs partial), answer quality & depth (specific vs generic), role alignment (comp expectations in range, availability, motivation, retention signals, technical correctness), and red flags (contradicts the résumé, unrealistic, evasive). If an assessment wasn't taken, rating = "na".
@@ -267,6 +281,12 @@ Rules for the CSV:
 - Wrap any `__reason` or `summary` value that contains a comma in double quotes.
 """
 
+RUBRIC_MD = RUBRIC_MD.replace("{LOCATION_FORMAT_HINT}", LOCATION_FORMAT_HINT)
+RESULTS_FORMAT_MD = RESULTS_FORMAT_MD.replace(
+    "{LOCATION_FORMAT_HINT}", LOCATION_FORMAT_HINT
+)
+PROMPT_MD = PROMPT_MD.replace("{LOCATION_FORMAT_HINT}", LOCATION_FORMAT_HINT)
+
 
 def _results_template(job_id: str, applicants: list[dict]) -> str:
     template = {
@@ -281,6 +301,7 @@ def _results_template(job_id: str, applicants: list[dict]) -> str:
                     f"{entry['row'].applicant_last_name}"
                 ),
                 "seniority_assessed": "",
+                "location": "",
                 "fit_score": None,
                 "recommendation": "",
                 "summary": "",
@@ -330,6 +351,7 @@ EVAL_CSV_COLUMNS = [
     "application_id",
     "applicant_name",
     "seniority_assessed",
+    "location",
     "fit_score",
     "recommendation",
     "summary",

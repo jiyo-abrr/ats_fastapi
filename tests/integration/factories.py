@@ -95,9 +95,13 @@ async def make_application(
         status=status,
         resume_object_key="applicant_resume/x/r.pdf",
         assessment_deadline=kw.get("assessment_deadline"),
+        interview_booking_deadline=kw.get("interview_booking_deadline"),
     )
     db.add(app)
     await db.flush()
+    if "created_at" in kw:
+        app.created_at = kw["created_at"]
+        await db.flush()
     return app
 
 

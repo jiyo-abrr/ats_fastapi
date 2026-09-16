@@ -11,6 +11,7 @@ from app.domains.auth.exceptions import (
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    ResumeScreeningConsentRequiredError,
     ResumeTooLargeError,
     UnsupportedResumeTypeError,
 )
@@ -70,11 +71,31 @@ class TestSignup:
                 last_name="B",
                 contact_number="1",
                 email="dup@example.com",
-                password="pw",
+                password="Str0ng!Pass",
                 resume_filename="resume.pdf",
                 resume_content_type="application/pdf",
                 resume_bytes=b"data",
+                resume_screening_consent=True,
             )
+
+    async def test_rejects_missing_resume_screening_consent(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_email.return_value = None
+
+        with pytest.raises(ResumeScreeningConsentRequiredError):
+            await service.signup(
+                first_name="A",
+                middle_initial=None,
+                last_name="B",
+                contact_number="1",
+                email="new@example.com",
+                password="Str0ng!Pass",
+                resume_filename="resume.pdf",
+                resume_content_type="application/pdf",
+                resume_bytes=b"data",
+                resume_screening_consent=False,
+            )
+        users.add.assert_not_called()
 
     async def test_rejects_unsupported_resume_type(self):
         service, users, roles, revoked_tokens, uow = make_service()
@@ -87,10 +108,11 @@ class TestSignup:
                 last_name="B",
                 contact_number="1",
                 email="new@example.com",
-                password="pw",
+                password="Str0ng!Pass",
                 resume_filename="resume.txt",
                 resume_content_type="text/plain",
                 resume_bytes=b"data",
+                resume_screening_consent=True,
             )
 
     async def test_rejects_oversized_resume(self):
@@ -104,10 +126,11 @@ class TestSignup:
                 last_name="B",
                 contact_number="1",
                 email="new@example.com",
-                password="pw",
+                password="Str0ng!Pass",
                 resume_filename="resume.pdf",
                 resume_content_type="application/pdf",
                 resume_bytes=b"x" * (6 * 1024 * 1024),
+                resume_screening_consent=True,
             )
 
     @patch("app.domains.auth.service.upload_object")
@@ -127,16 +150,18 @@ class TestSignup:
             last_name="Abarre",
             contact_number="123",
             email="new@example.com",
-            password="pw",
+            password="Str0ng!Pass",
             resume_filename="resume.pdf",
             resume_content_type="application/pdf",
             resume_bytes=b"data",
+            resume_screening_consent=True,
         )
 
         mock_upload.assert_called_once()
         uploaded_key = mock_upload.call_args[0][1]
         assert uploaded_key.startswith(f"applicant_resume/{added['entity'].id}/")
         assert added["entity"].role == "applicant"
+        assert added["entity"].resume_screening_consent_at is not None
         uow.commit.assert_called_once()
         assert result.access_token
         assert result.refresh_token
@@ -155,7 +180,7 @@ class TestCreateHrAccount:
                 last_name="B",
                 contact_number="1",
                 email="dup@example.com",
-                password="pw",
+                password="Str0ng!Pass",
             )
 
     async def test_happy_path_creates_hr_with_no_resume(self):
@@ -174,7 +199,7 @@ class TestCreateHrAccount:
             last_name="Reyes",
             contact_number="456",
             email="hana@example.com",
-            password="pw",
+            password="Str0ng!Pass",
         )
 
         assert added["entity"].role == "hr"

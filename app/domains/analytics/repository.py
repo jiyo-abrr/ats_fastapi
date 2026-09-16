@@ -5,6 +5,8 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.analytics.aggregation import (
+    bucket_for,
+    bucket_starts,
     fit_score_bands,
     period_start,
     rate,
@@ -150,7 +152,7 @@ class AnalyticsRepository:
             )
         ).scalar_one()
 
-        bucket = "month" if period == "all" else "day"
+        bucket = bucket_for(period)
         activity_rows = await self.db.execute(
             select(
                 func.date_trunc(bucket, Application.created_at).label("date"),
@@ -160,6 +162,25 @@ class AnalyticsRepository:
             .group_by("date")
             .order_by("date")
         )
+        activity_by_date = {row.date.date(): int(row.count) for row in activity_rows}
+
+        # GROUP BY only returns buckets that actually had an application, so
+        # a quiet window with activity on just a couple of days would
+        # otherwise come back as 2 sparse points instead of one per real
+        # bucket — a chart with no zero baseline for quiet buckets, which
+        # reads as broken rather than as "nothing happened here." Zero-fill
+        # the requested window ("yearly" has no lower bound to enumerate
+        # years from, so it stays sparse like before).
+        if period == "yearly":
+            application_activity = [
+                {"date": d, "count": c} for d, c in sorted(activity_by_date.items())
+            ]
+        else:
+            start_date = period_start(period, now).date()
+            application_activity = [
+                {"date": d, "count": activity_by_date.get(d, 0)}
+                for d in bucket_starts(start_date, now.date(), bucket)
+            ]
 
         return {
             "total_applications": total,
@@ -172,10 +193,7 @@ class AnalyticsRepository:
                 {"key": status.value, "count": status_counts[status.value]}
                 for status in ApplicationStatus
             ],
-            "application_activity": [
-                {"date": row.date.date(), "count": int(row.count)}
-                for row in activity_rows
-            ],
+            "application_activity": application_activity,
         }
 
     async def _roles(self, *, filters: list, position_id: uuid.UUID | None) -> dict:
@@ -579,11 +597,12 @@ class AnalyticsRepository:
                 },
             )[row.rating] = int(row.count)
 
+        now = datetime.now(timezone.utc)
         activity_filters: list = list(scope_filters)
-        start = period_start(period)
+        start = period_start(period, now)
         if start is not None:
             activity_filters.append(ApplicationEvaluation.created_at >= start)
-        bucket = "month" if period == "all" else "day"
+        bucket = bucket_for(period)
         activity_rows = await self.db.execute(
             select(
                 func.date_trunc(bucket, ApplicationEvaluation.created_at).label("date"),
@@ -594,6 +613,20 @@ class AnalyticsRepository:
             .group_by("date")
             .order_by("date")
         )
+        evaluation_activity_by_date = {
+            row.date.date(): int(row.count) for row in activity_rows
+        }
+        # Same zero-fill reasoning as application_activity in _hiring above.
+        if period == "yearly":
+            evaluation_activity = [
+                {"date": d, "count": c}
+                for d, c in sorted(evaluation_activity_by_date.items())
+            ]
+        else:
+            evaluation_activity = [
+                {"date": d, "count": evaluation_activity_by_date.get(d, 0)}
+                for d in bucket_starts(start.date(), now.date(), bucket)
+            ]
 
         bands = fit_score_bands(fit_scores)
         return {
@@ -609,12 +642,51 @@ class AnalyticsRepository:
             "recommendations": [
                 {"key": key, "count": value} for key, value in recommendations.items()
             ],
-            "evaluation_activity": [
-                {"date": row.date.date(), "count": int(row.count)}
-                for row in activity_rows
-            ],
+            "evaluation_activity": evaluation_activity,
             "fit_score_bands": [
                 {"key": key, "count": value} for key, value in bands.items()
             ],
             "score_dimensions": list(dimensions.values()),
         }
+
+    async def location_counts(
+        self, *, position_id: uuid.UUID | None
+    ) -> list[dict]:
+        """Latest evaluation's `location` per application in scope, tallied —
+        for the analytics locations graph/heatmap. All-time current-state,
+        same coverage semantics as the rest of _evaluations (not period-
+        scoped — this is "where are they now", not a recent-activity view)."""
+        scope_filters: list = []
+        if position_id is not None:
+            scope_filters.append(
+                Application.job_post_id.in_(
+                    select(JobPost.id).where(JobPost.position_id == position_id)
+                )
+            )
+        ranked = (
+            select(
+                ApplicationEvaluation.application_id,
+                ApplicationEvaluation.location,
+                func.row_number()
+                .over(
+                    partition_by=ApplicationEvaluation.application_id,
+                    order_by=(
+                        ApplicationEvaluation.created_at.desc(),
+                        ApplicationEvaluation.id.desc(),
+                    ),
+                )
+                .label("rank"),
+            )
+            .join(Application, Application.id == ApplicationEvaluation.application_id)
+            .where(*scope_filters)
+            .subquery()
+        )
+        rows = await self.db.execute(
+            select(
+                ranked.c.location, func.count(ranked.c.application_id).label("count")
+            )
+            .where(ranked.c.rank == 1, ranked.c.location.is_not(None))
+            .group_by(ranked.c.location)
+            .order_by(func.count(ranked.c.application_id).desc())
+        )
+        return [{"key": row.location, "count": int(row.count)} for row in rows]

@@ -23,3 +23,11 @@ def content_disposition_attachment(filename: str) -> str:
     fallback = _ascii_fallback(filename)
     encoded = quote(filename, safe="")
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
+
+
+def content_disposition_inline(filename: str) -> str:
+    """Same encoding as `content_disposition_attachment`, but `inline` so a
+    browser renders the file (e.g. a PDF preview) instead of downloading it."""
+    fallback = _ascii_fallback(filename)
+    encoded = quote(filename, safe="")
+    return f"inline; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"

@@ -97,3 +97,13 @@ with DAG(
         command=_sweep_command("purge-expired-tokens"),
         cmd_timeout=120,
     )
+
+    # Also independent — a different stage (`interview`) and a different
+    # deadline column (interview_booking_deadline) than the applied/
+    # assessment chain above, so it has no ordering dependency on it.
+    disqualify_interviews_task = SSHOperator(
+        task_id="disqualify_interviews",
+        ssh_conn_id=APP_HOST_SSH_CONN_ID,
+        command=_sweep_command("disqualify-interviews"),
+        cmd_timeout=300,
+    )

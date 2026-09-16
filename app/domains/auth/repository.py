@@ -25,6 +25,7 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             role_id=obj.role_id,
             role=obj.role.name,
             resume_object_key=obj.resume_object_key,
+            resume_screening_consent_at=obj.resume_screening_consent_at,
             is_active=obj.is_active,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
@@ -41,6 +42,7 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             password_hash=entity.password_hash,
             role_id=entity.role_id,
             resume_object_key=entity.resume_object_key,
+            resume_screening_consent_at=entity.resume_screening_consent_at,
         )
 
     # Overridden: _to_entity accesses obj.role.name — under AsyncSession that

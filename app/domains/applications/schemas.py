@@ -59,6 +59,7 @@ class ApplicationOut(_StatusCapabilitiesMixin):
     applicant_id: uuid.UUID
     resume_object_key: str
     assessment_deadline: datetime | None
+    interview_booking_deadline: datetime | None
     created_at: datetime
     updated_at: datetime
 

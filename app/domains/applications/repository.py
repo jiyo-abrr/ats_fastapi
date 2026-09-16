@@ -26,6 +26,7 @@ class ApplicationRepository(
             status=obj.status,
             resume_object_key=obj.resume_object_key,
             assessment_deadline=obj.assessment_deadline,
+            interview_booking_deadline=obj.interview_booking_deadline,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -38,6 +39,7 @@ class ApplicationRepository(
             status=entity.status,
             resume_object_key=entity.resume_object_key,
             assessment_deadline=entity.assessment_deadline,
+            interview_booking_deadline=entity.interview_booking_deadline,
         )
 
     async def update_status(self, application_id: uuid.UUID, status: str) -> None:
@@ -71,6 +73,14 @@ class ApplicationRepository(
         if obj is None:
             return
         obj.assessment_deadline = new_deadline
+
+    async def set_interview_booking_deadline(
+        self, application_id: uuid.UUID, deadline: datetime
+    ) -> None:
+        obj = await self.db.get(ApplicationModel, application_id)
+        if obj is None:
+            return
+        obj.interview_booking_deadline = deadline
 
     async def add_deadline_extension(
         self, extension: entities.AssessmentDeadlineExtension
@@ -152,10 +162,15 @@ class ApplicationRepository(
     async def has_any_application_for(
         self, applicant_id: uuid.UUID, job_post_id: uuid.UUID
     ) -> bool:
+        """For `excluded_job_post_ids` (review: block re-applying elsewhere
+        after applying to a given job post). A withdrawn application doesn't
+        count — same "withdrawing is a clean exit" rule as the active-
+        application unique index (see models.py)."""
         result = await self.db.execute(
             select(ApplicationModel.id).where(
                 ApplicationModel.applicant_id == applicant_id,
                 ApplicationModel.job_post_id == job_post_id,
+                ApplicationModel.status != ApplicationStatus.WITHDRAWN.value,
             )
         )
         return result.first() is not None

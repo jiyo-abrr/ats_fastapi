@@ -186,6 +186,10 @@ class InterviewConfigIn(BaseModel):
     horizon_days: int = Field(ge=1, le=120)
     min_notice_hours: int = Field(ge=0, le=336)
     timezone: str
+    # Days from the prescreening -> interview transition a candidate has to
+    # book a slot before being auto-disqualified — see
+    # Application.interview_booking_deadline.
+    interview_booking_days: int = Field(default=21, ge=1, le=120)
 
     @field_validator("timezone")
     @classmethod
@@ -202,13 +206,14 @@ class InterviewConfigOut(BaseModel):
     horizon_days: int
     min_notice_hours: int
     timezone: str
+    interview_booking_days: int
 
 
 class LogisticsPresetIn(BaseModel):
-    """A named, reusable video-call link or on-site address. An on-site preset
-    either links a saved `company_addresses` row (`company_address_id`) —
-    its formatted text is shown instead of `value` — or is typed free text,
-    same as a video preset."""
+    """A named, reusable video-call link or on-site address. An on-site
+    preset must link a saved `company_addresses` row (`company_address_id`) —
+    its formatted text is shown instead of `value`, which is always cleared.
+    A video preset is typed free text and may never link an address."""
 
     mode: Literal["video", "onsite"]
     label: str = Field(min_length=1, max_length=100)
@@ -233,12 +238,17 @@ class LogisticsPresetIn(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> "LogisticsPresetIn":
-        if self.company_address_id is not None:
-            if self.mode != "onsite":
-                raise ValueError("only an on-site preset can link a company address")
+        if self.mode == "onsite":
+            if self.company_address_id is None:
+                raise ValueError(
+                    "an on-site preset must link a saved company address"
+                )
             self.value = None  # ignored in favor of the linked address
-        elif not self.value:
-            raise ValueError("a preset needs either a value or a linked address")
+        else:
+            if self.company_address_id is not None:
+                raise ValueError("only an on-site preset can link a company address")
+            if not self.value:
+                raise ValueError("a preset needs a value")
         return self
 
 

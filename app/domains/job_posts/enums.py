@@ -4,7 +4,7 @@ from enum import StrEnum
 class EmploymentType(StrEnum):
     FULL_TIME = "full_time"
     PART_TIME = "part_time"
-    CONTRACT = "contract"
+    PROJECT_BASED = "project_based"
     INTERNSHIP = "internship"
     TEMPORARY = "temporary"
 

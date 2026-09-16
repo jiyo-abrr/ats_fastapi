@@ -20,6 +20,7 @@ class InterviewConfig:
     horizon_days: int
     min_notice_hours: int
     timezone: str
+    interview_booking_days: int = 21
     updated_at: datetime | None = None
 
 

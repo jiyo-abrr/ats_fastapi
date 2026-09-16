@@ -1,7 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.domains.analytics.aggregation import (
     FIT_SCORE_BANDS,
+    bucket_for,
+    bucket_starts,
     fit_score_bands,
     period_start,
     rate,
@@ -12,17 +14,54 @@ _NOW = datetime(2026, 9, 9, tzinfo=timezone.utc)
 
 
 class TestPeriodStart:
-    def test_all_has_no_lower_bound(self):
-        assert period_start("all", _NOW) is None
+    def test_yearly_has_no_lower_bound(self):
+        assert period_start("yearly", _NOW) is None
 
-    def test_30d(self):
-        assert period_start("30d", _NOW) == _NOW - timedelta(days=30)
+    def test_daily_is_start_of_current_month(self):
+        assert period_start("daily", _NOW) == datetime(
+            2026, 9, 1, tzinfo=timezone.utc
+        )
 
-    def test_90d(self):
-        assert period_start("90d", _NOW) == _NOW - timedelta(days=90)
+    def test_weekly_is_12_weeks_back(self):
+        assert period_start("weekly", _NOW) == _NOW - timedelta(weeks=12)
+
+    def test_monthly_is_start_of_current_year(self):
+        assert period_start("monthly", _NOW) == datetime(
+            2026, 1, 1, tzinfo=timezone.utc
+        )
 
     def test_unknown_period_falls_through_to_no_bound(self):
         assert period_start("bogus", _NOW) is None
+
+
+class TestBucketFor:
+    def test_maps_each_granularity(self):
+        assert bucket_for("daily") == "day"
+        assert bucket_for("weekly") == "week"
+        assert bucket_for("monthly") == "month"
+        assert bucket_for("yearly") == "year"
+
+    def test_unknown_falls_back_to_day(self):
+        assert bucket_for("bogus") == "day"
+
+
+class TestBucketStarts:
+    def test_day_bucket_is_inclusive_range(self):
+        starts = bucket_starts(date(2026, 9, 1), date(2026, 9, 3), "day")
+        assert starts == [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)]
+
+    def test_week_bucket_is_monday_aligned(self):
+        # 2026-09-09 is a Wednesday; its week starts Monday 2026-09-07.
+        starts = bucket_starts(date(2026, 9, 9), date(2026, 9, 9), "week")
+        assert starts == [date(2026, 9, 7)]
+
+    def test_week_bucket_spans_multiple_weeks(self):
+        starts = bucket_starts(date(2026, 8, 25), date(2026, 9, 9), "week")
+        assert starts == [date(2026, 8, 24), date(2026, 8, 31), date(2026, 9, 7)]
+
+    def test_month_bucket_spans_year_boundary(self):
+        starts = bucket_starts(date(2025, 11, 15), date(2026, 1, 5), "month")
+        assert starts == [date(2025, 11, 1), date(2025, 12, 1), date(2026, 1, 1)]
 
 
 class TestRate:

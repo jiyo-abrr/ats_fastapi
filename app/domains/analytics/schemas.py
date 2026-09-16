@@ -97,6 +97,13 @@ class EvaluationsAnalyticsOut(BaseModel):
     score_dimensions: list[EvaluationDimensionOut]
 
 
+class LocationCountOut(BaseModel):
+    key: str
+    count: int
+    latitude: float | None = None
+    longitude: float | None = None
+
+
 class AnalyticsOverviewOut(BaseModel):
     period: str
     position_id: uuid.UUID | None = None

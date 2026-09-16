@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.core.config import settings
 from app.core.database import Base
+from app.domains.analytics import models as analytics_models  # noqa: F401
 from app.domains.applications import models as application_models  # noqa: F401
 from app.domains.assessments.attempts import models as assessment_models  # noqa: F401
 from app.domains.assessments.culture_fit_templates import (

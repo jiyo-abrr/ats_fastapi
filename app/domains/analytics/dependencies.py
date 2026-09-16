@@ -14,5 +14,6 @@ def get_analytics_repository(
 
 def get_analytics_service(
     analytics: AnalyticsRepository = Depends(get_analytics_repository),
+    db: AsyncSession = Depends(get_db),
 ) -> AnalyticsService:
-    return AnalyticsService(analytics)
+    return AnalyticsService(analytics, db)

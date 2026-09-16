@@ -11,6 +11,7 @@ class Application:
     status: str
     resume_object_key: str
     assessment_deadline: datetime | None = None
+    interview_booking_deadline: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

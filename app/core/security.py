@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,27 @@ MAX_PASSWORD_BYTES = 72
 
 def password_exceeds_max_length(password: str) -> bool:
     return len(password.encode("utf-8")) > MAX_PASSWORD_BYTES
+
+
+# Mirrors the frontend's zod password rule (features/auth/schema.ts) — kept in
+# sync by hand since the two run in different languages. A "special
+# character" is anything that isn't a letter or digit (matches how the
+# frontend regex is written), not a fixed allow-list.
+MIN_PASSWORD_LENGTH = 8
+_HAS_LOWER = re.compile(r"[a-z]")
+_HAS_UPPER = re.compile(r"[A-Z]")
+_HAS_DIGIT = re.compile(r"\d")
+_HAS_SPECIAL = re.compile(r"[^A-Za-z0-9]")
+
+
+def password_meets_complexity(password: str) -> bool:
+    return (
+        len(password) >= MIN_PASSWORD_LENGTH
+        and _HAS_LOWER.search(password) is not None
+        and _HAS_UPPER.search(password) is not None
+        and _HAS_DIGIT.search(password) is not None
+        and _HAS_SPECIAL.search(password) is not None
+    )
 
 
 def hash_password(password: str) -> str:

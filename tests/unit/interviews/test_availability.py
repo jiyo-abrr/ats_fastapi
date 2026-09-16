@@ -113,6 +113,13 @@ def test_logistics_preset_linked_address_ignores_typed_value():
     assert preset.value is None
 
 
+def test_logistics_preset_onsite_requires_linked_address():
+    """Typed free text is no longer enough for an on-site preset — it must
+    link a saved company address, even when a value is also given."""
+    with pytest.raises(ValidationError):
+        LogisticsPresetIn(mode="onsite", label="HQ", value="5F, Tower One, BGC")
+
+
 def test_blackout_override_defaults_end_date_and_clears_hours():
     ov = DateOverrideIn(start_date=date(2026, 12, 25), start="09:00", end="17:00")
     assert ov.is_unavailable is True

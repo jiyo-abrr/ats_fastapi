@@ -140,6 +140,8 @@ class JobPostService:
         qualifications: str,
         salary_min: Decimal | None,
         salary_max: Decimal | None,
+        show_salary: bool = False,
+        show_tags: bool = False,
         currency: str,
         employment_type: str,
         status: str,
@@ -148,6 +150,7 @@ class JobPostService:
         tag_ids: list[uuid.UUID],
         excluded_job_post_ids: list[uuid.UUID],
         assessment_window_days: int = 4,
+        interview_booking_days: int | None = None,
         pre_assessment_template_id: uuid.UUID | None = None,
         culture_fit_template_id: uuid.UUID | None = None,
         technical_assessment_template_id: uuid.UUID | None = None,
@@ -215,6 +218,8 @@ class JobPostService:
                 qualifications=qualifications,
                 salary_min=salary_min,
                 salary_max=salary_max,
+                show_salary=show_salary,
+                show_tags=show_tags,
                 currency=currency,
                 employment_type=employment_type,
                 status=status,
@@ -226,6 +231,7 @@ class JobPostService:
                 position_id=position_id,
                 position_title=position.title,
                 assessment_window_days=assessment_window_days,
+                interview_booking_days=interview_booking_days,
             )
         )
         # Flush before staging tag/exclusion rows: they reference job_posts.id
@@ -263,12 +269,15 @@ class JobPostService:
         qualifications: str,
         salary_min: Decimal | None,
         salary_max: Decimal | None,
+        show_salary: bool = False,
+        show_tags: bool = False,
         currency: str,
         employment_type: str,
         status: str,
         company_address_id: uuid.UUID,
         position_id: uuid.UUID,
         assessment_window_days: int = 4,
+        interview_booking_days: int | None = None,
     ) -> entities.JobPost:
         existing = await self.get(job_post_id)
         if status == JobPostStatus.PUBLISHED:
@@ -298,6 +307,8 @@ class JobPostService:
                 qualifications=qualifications,
                 salary_min=salary_min,
                 salary_max=salary_max,
+                show_salary=show_salary,
+                show_tags=show_tags,
                 currency=currency,
                 employment_type=employment_type,
                 status=status,
@@ -309,6 +320,7 @@ class JobPostService:
                 position_id=position_id,
                 position_title=position.title,
                 assessment_window_days=assessment_window_days,
+                interview_booking_days=interview_booking_days,
             )
         )
         await self.uow.commit()

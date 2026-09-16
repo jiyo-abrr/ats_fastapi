@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 # Bounds mirror the DB column widths in models.py so an over-long value is a
 # 422 at the request boundary, not a database error mid-transaction.
@@ -24,6 +24,13 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    resume_object_key: str | None = Field(default=None, exclude=True)
+    resume_screening_consent_at: datetime | None = None
+
+    @computed_field
+    @property
+    def has_resume(self) -> bool:
+        return self.resume_object_key is not None
 
 
 class LoginRequest(BaseModel):

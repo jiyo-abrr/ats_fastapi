@@ -28,6 +28,12 @@ class User(Base):
     )
     role: Mapped["Role"] = relationship()
     resume_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Set once at applicant signup when the "use my résumé for screening"
+    # checkbox is accepted — NULL for HR/admin accounts, which never see
+    # that step. See AuthService.signup().
+    resume_screening_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )

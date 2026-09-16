@@ -50,6 +50,7 @@ class InterviewAvailabilityRepository:
             horizon_days=obj.horizon_days,
             min_notice_hours=obj.min_notice_hours,
             timezone=obj.timezone,
+            interview_booking_days=obj.interview_booking_days,
             updated_at=obj.updated_at,
         )
 
@@ -69,6 +70,7 @@ class InterviewAvailabilityRepository:
         obj.horizon_days = config.horizon_days
         obj.min_notice_hours = config.min_notice_hours
         obj.timezone = config.timezone
+        obj.interview_booking_days = config.interview_booking_days
 
     # -- logistics presets --------------------------------------------------
 

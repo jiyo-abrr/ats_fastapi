@@ -189,6 +189,20 @@ async def delete_interview(
     await interviews.delete_request(application_id)
 
 
+@interview_router.post(
+    "/{application_id}/interview/reopen",
+    response_model=InterviewRequestOut,
+    dependencies=[_manage_applications],
+)
+async def reopen_interview(
+    application_id: uuid.UUID,
+    interviews: InterviewService = Depends(get_interview_service),
+) -> InterviewRequestOut:
+    """Un-confirms the candidate's selected slot so they can pick again,
+    keeping the rest of the interview (mode/duration/notes/times) intact."""
+    return await interviews.reopen(application_id)
+
+
 @interview_router.get(
     "/{application_id}/interview/open-slots",
     response_model=list[OpenSlotOut],

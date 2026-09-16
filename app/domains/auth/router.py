@@ -2,6 +2,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi.responses import Response
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from fastapi_querybuilder import QueryBuilder
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.http_headers import content_disposition_inline
 from app.core.rate_limit import rate_limit
 from app.core.uploads import read_upload_bounded
 from app.domains.auth import entities
@@ -53,6 +55,7 @@ async def signup(
     email: EmailStr = Form(...),
     password: str = Form(...),
     resume: UploadFile = File(...),
+    resume_screening_consent: bool = Form(...),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SignupResponse:
     # Read with a hard cap so an oversized upload can't balloon memory before
@@ -69,6 +72,7 @@ async def signup(
         resume_filename=resume.filename or "resume",
         resume_content_type=resume.content_type,
         resume_bytes=resume_bytes,
+        resume_screening_consent=resume_screening_consent,
     )
 
 
@@ -179,3 +183,25 @@ async def logout(
 @router.get("/me", response_model=UserOut)
 async def me(current_user: entities.User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)
+
+
+@router.put("/me", response_model=UserOut)
+async def update_me(
+    payload: UserUpdateRequest,
+    current_user: entities.User = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> UserOut:
+    return await auth_service.update_user(current_user.id, **payload.model_dump())
+
+
+@router.get("/me/resume")
+async def my_resume(
+    current_user: entities.User = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> Response:
+    data, content_type, filename = await auth_service.get_own_resume(current_user)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": content_disposition_inline(filename)},
+    )

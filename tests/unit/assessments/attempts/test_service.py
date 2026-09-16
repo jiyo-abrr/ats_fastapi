@@ -308,6 +308,63 @@ class TestSubmitAnswer:
         attempts.complete_attempt.assert_called_once()
         uow.commit.assert_called_once()
 
+    async def test_advances_application_to_prescreening_once_fully_assessed(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        q1 = make_question(order_index=1, config={"min": 1, "max": 5})
+        attempt = make_attempt(
+            status=AttemptStatus.IN_PROGRESS, started_at=datetime.now(UTC)
+        )
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id,
+            applicant_id=user.id,
+            status=ApplicationStatus.APPLIED,
+        )
+        attempts.get_by_id.return_value = attempt
+        templates.get_by_id.return_value = make_template(
+            questions=[q1], time_limit_minutes=None
+        )
+        answer = make_answer(question_id=q1.id, answer_value=None)
+        attempts.list_live_answers.return_value = [answer]
+        attempts.list_for_application.return_value = [
+            make_attempt(status=AttemptStatus.COMPLETED)
+        ]
+
+        await service.submit_answer(attempt.id, q1.id, 3, user)
+
+        applications.compare_and_set_status.assert_called_once_with(
+            attempt.application_id,
+            expected=ApplicationStatus.APPLIED.value,
+            new=ApplicationStatus.PRESCREENING.value,
+        )
+
+    async def test_does_not_advance_when_other_attempts_still_incomplete(self):
+        service, attempts, templates, job_posts, applications, uow = make_service()
+        user = make_user()
+        q1 = make_question(order_index=1, config={"min": 1, "max": 5})
+        attempt = make_attempt(
+            status=AttemptStatus.IN_PROGRESS, started_at=datetime.now(UTC)
+        )
+        applications.get_by_id.return_value = make_application(
+            id=attempt.application_id,
+            applicant_id=user.id,
+            status=ApplicationStatus.APPLIED,
+        )
+        attempts.get_by_id.return_value = attempt
+        templates.get_by_id.return_value = make_template(
+            questions=[q1], time_limit_minutes=None
+        )
+        answer = make_answer(question_id=q1.id, answer_value=None)
+        attempts.list_live_answers.return_value = [answer]
+        attempts.list_for_application.return_value = [
+            make_attempt(status=AttemptStatus.COMPLETED),
+            make_attempt(status=AttemptStatus.NOT_STARTED),
+        ]
+
+        await service.submit_answer(attempt.id, q1.id, 3, user)
+
+        applications.compare_and_set_status.assert_not_called()
+
     async def test_rejects_invalid_answer_value(self):
         service, attempts, templates, job_posts, applications, uow = make_service()
         user = make_user()

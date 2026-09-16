@@ -57,6 +57,8 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             qualifications=obj.qualifications,
             salary_min=obj.salary_min,
             salary_max=obj.salary_max,
+            show_salary=obj.show_salary,
+            show_tags=obj.show_tags,
             currency=obj.currency,
             employment_type=obj.employment_type,
             status=obj.status,
@@ -68,6 +70,7 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             position_id=obj.position_id,
             position_title=obj.position.title,
             assessment_window_days=obj.assessment_window_days,
+            interview_booking_days=obj.interview_booking_days,
             tags=[Tag(id=t.id, name=t.name, description=t.description) for t in tags],
             excluded_job_post_ids=excluded_ids,
             pre_assessment_template_id=pre_id,
@@ -192,12 +195,15 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             qualifications=entity.qualifications,
             salary_min=entity.salary_min,
             salary_max=entity.salary_max,
+            show_salary=entity.show_salary,
+            show_tags=entity.show_tags,
             currency=entity.currency,
             employment_type=entity.employment_type,
             status=entity.status,
             company_address_id=entity.company_address_id,
             position_id=entity.position_id,
             assessment_window_days=entity.assessment_window_days,
+            interview_booking_days=entity.interview_booking_days,
         )
 
     # Overridden: _to_entity accesses obj.company_address.label / obj.position.title
@@ -232,12 +238,15 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         obj.qualifications = entity.qualifications
         obj.salary_min = entity.salary_min
         obj.salary_max = entity.salary_max
+        obj.show_salary = entity.show_salary
+        obj.show_tags = entity.show_tags
         obj.currency = entity.currency
         obj.employment_type = entity.employment_type
         obj.status = entity.status
         obj.company_address_id = entity.company_address_id
         obj.position_id = entity.position_id
         obj.assessment_window_days = entity.assessment_window_days
+        obj.interview_booking_days = entity.interview_booking_days
 
     async def add_tag(self, job_post_id: uuid.UUID, tag_id: uuid.UUID) -> None:
         if await self.db.get(JobPostTag, (job_post_id, tag_id)) is not None:

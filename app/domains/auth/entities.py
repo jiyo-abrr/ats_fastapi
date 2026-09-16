@@ -15,6 +15,10 @@ class User:
     role_id: uuid.UUID
     role: str
     resume_object_key: str | None
+    # When an applicant consented, at signup, to their résumé being used for
+    # screening — NULL for HR/admin accounts, which never go through that
+    # consent step. Set once, never edited.
+    resume_screening_consent_at: datetime | None = None
     is_active: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None

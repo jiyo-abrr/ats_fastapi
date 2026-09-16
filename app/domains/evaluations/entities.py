@@ -28,6 +28,7 @@ class ApplicationEvaluation:
     recommendation: str | None = None
     fit_score: int | None = None
     seniority_assessed: str | None = None
+    location: str | None = None
     summary: str | None = None
     model: str | None = None
     rubric_version: str | None = None

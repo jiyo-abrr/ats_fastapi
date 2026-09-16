@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import Row, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
 from app.domains.company_addresses.models import CompanyAddress
@@ -243,6 +244,40 @@ class InterviewRepository:
             )
         ).all()
         return {row[0] for row in rows}
+
+    async def list_overdue_interview_ids(
+        self, now: datetime, *, limit: int | None = None
+    ) -> list[uuid.UUID]:
+        """Applications still `interview` whose interview_booking_deadline has
+        passed with no slot ever confirmed — candidates for the interview-
+        stage disqualification sweep. Excludes anyone who already booked (so
+        a candidate who booked, however long ago, never resurfaces here again
+        once past the deadline) rather than leaving that check to the caller,
+        the same one-way `interviews` -> `applications` projection read
+        `applications_awaiting_slot_pick` already documents above."""
+        confirmed_request_ids = (
+            select(InterviewSlotModel.request_id)
+            .where(InterviewSlotModel.selected_at.is_not(None))
+            .scalar_subquery()
+        )
+        booked_application_ids = (
+            select(InterviewRequestModel.application_id)
+            .where(InterviewRequestModel.id.in_(confirmed_request_ids))
+            .scalar_subquery()
+        )
+        stmt = (
+            select(Application.id)
+            .where(
+                Application.status == ApplicationStatus.INTERVIEW.value,
+                Application.interview_booking_deadline.is_not(None),
+                Application.interview_booking_deadline < now,
+                Application.id.not_in(booked_application_ids),
+            )
+            .order_by(Application.interview_booking_deadline)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return [row[0] for row in (await self.db.execute(stmt)).all()]
 
     async def delete_request(self, application_id: uuid.UUID) -> None:
         await self.db.execute(

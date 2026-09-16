@@ -19,6 +19,7 @@ import typer
 
 from app.scripts import (
     disqualify_overdue_applications,
+    disqualify_overdue_interviews,
     expire_overdue_assessment_attempts,
     purge_expired_revoked_tokens,
 )
@@ -74,6 +75,27 @@ def disqualify_applications(
     of the sweep). Run *after* expire-attempts in the same tick — see
     app/scripts/disqualify_overdue_applications.py's module docstring."""
     result = _run_sync(disqualify_overdue_applications.main())
+    if json_output:
+        typer.echo(json.dumps(result if result is not None else {"skipped": True}))
+    if result is None:
+        typer.echo(
+            "skipped — another sweep run already held the advisory lock", err=True
+        )
+
+
+@sweep_app.command("disqualify-interviews")
+def disqualify_interviews(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print {'disqualified': N} as JSON, not a log line.",
+    ),
+) -> None:
+    """Disqualify `interview`-stage applications whose interview_booking_deadline
+    has passed with no slot booked. Independent of the expire-attempts /
+    disqualify-applications ordering above — different stage, different
+    deadline column."""
+    result = _run_sync(disqualify_overdue_interviews.main())
     if json_output:
         typer.echo(json.dumps(result if result is not None else {"skipped": True}))
     if result is None:

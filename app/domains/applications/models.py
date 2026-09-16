@@ -65,6 +65,14 @@ class Application(Base):
     assessment_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set once, when the application moves prescreening -> interview (see
+    # ApplicationRouter.update_status): the candidate has this many days
+    # (InterviewConfig.interview_booking_days) to pick a slot, or the
+    # disqualify_overdue_interviews sweep auto-disqualifies them. Never
+    # touched again once set — there's no "extend" action for this one.
+    interview_booking_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

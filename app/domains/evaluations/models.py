@@ -92,6 +92,10 @@ class ApplicationEvaluation(Base):
     recommendation: Mapped[str | None] = mapped_column(String(20), nullable=True)
     fit_score: Mapped[int | None] = mapped_column(nullable=True)
     seniority_assessed: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Standardized as "City, Province" (or "Remote") — see dimensions.py's
+    # LOCATION_FORMAT_HINT, echoed into the export pack's rubric/prompt so the
+    # AI's output stays consistent enough to group on for location analytics.
+    location: Mapped[str | None] = mapped_column(String(120), nullable=True)
     summary: Mapped[str | None] = mapped_column(String(5000), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     rubric_version: Mapped[str | None] = mapped_column(String(20), nullable=True)

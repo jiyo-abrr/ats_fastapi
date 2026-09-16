@@ -40,12 +40,20 @@ class InterviewConfig(Base):
             "min_notice_hours >= 0 AND min_notice_hours <= 336",
             name="ck_interview_config_min_notice_hours",
         ),
+        CheckConstraint(
+            "interview_booking_days >= 1 AND interview_booking_days <= 120",
+            name="ck_interview_config_interview_booking_days",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     slot_minutes: Mapped[int] = mapped_column(nullable=False, default=45)
     horizon_days: Mapped[int] = mapped_column(nullable=False, default=21)
     min_notice_hours: Mapped[int] = mapped_column(nullable=False, default=12)
+    # Days from the prescreening -> interview transition a candidate has to
+    # book a slot before the disqualify_overdue_interviews sweep auto-
+    # disqualifies them — see Application.interview_booking_deadline.
+    interview_booking_days: Mapped[int] = mapped_column(nullable=False, default=21)
     # IANA name; the wall-clock times in InterviewAvailabilityRule are read
     # against this zone when generating concrete slot instants.
     timezone: Mapped[str] = mapped_column(

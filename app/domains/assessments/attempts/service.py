@@ -266,6 +266,7 @@ class AssessmentService:
 
         if current_question is None:
             await self.attempts.complete_attempt(attempt_id, now)
+            await self._advance_to_prescreening_if_ready(attempt.application_id)
             await self.uow.commit()
             raise AssessmentAttemptAlreadyCompletedError(
                 f"Assessment attempt '{attempt_id}' is already completed"
@@ -331,6 +332,7 @@ class AssessmentService:
         )
         if next_question is None:
             await self.attempts.complete_attempt(attempt_id, now)
+            await self._advance_to_prescreening_if_ready(attempt.application_id)
 
         await self.uow.commit()
         return await self._with_total_questions(
@@ -425,6 +427,7 @@ class AssessmentService:
             )
             if current is None:
                 await self.attempts.complete_attempt(attempt.id, now)
+                await self._advance_to_prescreening_if_ready(attempt.application_id)
 
         await self.uow.commit()
         return list(expired_ids)
@@ -436,6 +439,26 @@ class AssessmentService:
         if not attempts:
             return True
         return all(attempt.status == AttemptStatus.COMPLETED for attempt in attempts)
+
+    async def _advance_to_prescreening_if_ready(
+        self, application_id: uuid.UUID
+    ) -> None:
+        """Auto-advance `applied` -> `prescreening` the moment every attached
+        assessment is completed, so HR finds it already queued instead of
+        having to notice completion and move it by hand. Conditional/
+        idempotent: a no-op if the application isn't `applied` any more (HR
+        already moved it, or it was disqualified/withdrawn) or still has
+        attempts outstanding. Caller commits."""
+        application = await self.applications.get_by_id(application_id)
+        if application is None or application.status != ApplicationStatus.APPLIED:
+            return
+        if not await self.is_application_fully_assessed(application_id):
+            return
+        await self.applications.compare_and_set_status(
+            application_id,
+            expected=ApplicationStatus.APPLIED.value,
+            new=ApplicationStatus.PRESCREENING.value,
+        )
 
     async def list_for_application(
         self, application_id: uuid.UUID

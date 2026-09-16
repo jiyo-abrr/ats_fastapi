@@ -39,9 +39,21 @@ class UnsupportedResumeTypeError(ValidationError):
     pass
 
 
+class ResumeScreeningConsentRequiredError(ValidationError):
+    """Signup didn't check the "use my résumé for screening" box."""
+
+
 class ResumeTooLargeError(ValidationError):
+    pass
+
+
+class ResumeUnavailableError(NotFoundError):
     pass
 
 
 class PasswordTooLongError(ValidationError):
     """Password exceeds bcrypt's 72-byte input limit."""
+
+
+class PasswordTooWeakError(ValidationError):
+    """Password doesn't meet the minimum complexity requirement."""

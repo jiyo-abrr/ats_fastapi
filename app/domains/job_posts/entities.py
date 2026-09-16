@@ -24,8 +24,12 @@ class JobPost:
     company_address_longitude: Decimal | None
     position_id: uuid.UUID
     position_title: str
+    show_salary: bool = False
+    show_tags: bool = False
     currency: str = "PHP"
     assessment_window_days: int = 4
+    # NULL = use InterviewConfig.interview_booking_days (the global default).
+    interview_booking_days: int | None = None
     tags: list[Tag] = field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = field(default_factory=list)
     # At most one of each — enforced by a UniqueConstraint(job_post_id) on

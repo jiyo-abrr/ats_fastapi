@@ -36,13 +36,17 @@ def _drop_blank_scores(value: object) -> object:
 class ApplicationEvaluationIn(BaseModel):
     application_id: uuid.UUID
     seniority_assessed: str | None = Field(default=None, max_length=50)
+    # Standardized "City, Province" / "Remote" — see dimensions.LOCATION_FORMAT_HINT.
+    location: str | None = Field(default=None, max_length=120)
     fit_score: int | None = Field(default=None, ge=0, le=100)
     recommendation: Recommendation | None = None
     summary: str | None = Field(default=None, max_length=5000)
     resume_scores: list[EvaluationScoreIn] = Field(default_factory=list)
     assessment_scores: list[EvaluationScoreIn] = Field(default_factory=list)
 
-    @field_validator("seniority_assessed", "summary", "recommendation", mode="before")
+    @field_validator(
+        "seniority_assessed", "location", "summary", "recommendation", mode="before"
+    )
     @classmethod
     def _blank_to_none(cls, v: object) -> object:
         return None if isinstance(v, str) and not v.strip() else v
@@ -121,6 +125,7 @@ class ApplicationEvaluationOut(BaseModel):
     recommendation: str | None
     fit_score: int | None
     seniority_assessed: str | None
+    location: str | None
     summary: str | None
     model: str | None
     rubric_version: str | None

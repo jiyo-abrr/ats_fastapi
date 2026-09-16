@@ -67,7 +67,14 @@ class InterviewAvailabilityService:
             horizon_days=config.horizon_days,
             min_notice_hours=config.min_notice_hours,
             timezone=config.timezone,
+            interview_booking_days=config.interview_booking_days,
         )
+
+    async def get_config(self) -> entities.InterviewConfig:
+        """Thin accessor for callers outside this service that only need the
+        config (the applications router, computing a new application's
+        interview_booking_deadline) — not the full availability payload."""
+        return await self.availability.get_or_create_config()
 
     # -- logistics presets -------------------------------------------------
 
@@ -239,6 +246,7 @@ class InterviewAvailabilityService:
         config.horizon_days = payload.config.horizon_days
         config.min_notice_hours = payload.config.min_notice_hours
         config.timezone = payload.config.timezone
+        config.interview_booking_days = payload.config.interview_booking_days
         await self.availability.save_config(config)
         await self._replace_windows(None, payload.windows)
         await self._replace_presets(None, payload.logistics_presets)
@@ -391,6 +399,11 @@ class InterviewAvailabilityService:
 
         now = datetime.now(UTC)
         earliest = now + timedelta(hours=config.min_notice_hours)
+        # Slots past the candidate's own interview_booking_deadline (set when
+        # the application moved into this stage) aren't offered — that
+        # deadline is what disqualify_overdue_interviews enforces on the back
+        # end, so the picker shouldn't dangle times it would then reject.
+        deadline = application.interview_booking_deadline
         booked = await self.availability.booked_intervals(
             request.id if request else None
         )
@@ -423,6 +436,8 @@ class InterviewAvailabilityService:
                     start_utc = local_start.astimezone(UTC)
                     cursor += step
                     if start_utc < earliest or overlaps_booked(start_utc):
+                        continue
+                    if deadline is not None and start_utc >= deadline:
                         continue
                     by_start.setdefault(
                         start_utc,

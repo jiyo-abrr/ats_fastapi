@@ -506,6 +506,88 @@ class TestDisqualify:
         applications.compare_and_set_status.assert_not_called()
 
 
+class TestSetInterviewBookingDeadlineForTransition:
+    async def test_uses_global_default_when_job_post_has_no_override(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        job_post = make_job_post(interview_booking_days=None)
+        application = make_application(job_post_id=job_post.id)
+        applications.get_by_id.return_value = application
+        job_posts.get_by_id.return_value = job_post
+
+        before = datetime.now(UTC)
+        await service.set_interview_booking_deadline_for_transition(
+            application.id, default_days=21
+        )
+
+        applications.set_interview_booking_deadline.assert_called_once()
+        called_id, deadline = applications.set_interview_booking_deadline.call_args[0]
+        assert called_id == application.id
+        gap = deadline - before
+        assert timedelta(days=20, hours=23) < gap < timedelta(days=21, hours=1)
+        uow.commit.assert_called_once()
+
+    async def test_uses_job_post_override_over_global_default(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        job_post = make_job_post(interview_booking_days=7)
+        application = make_application(job_post_id=job_post.id)
+        applications.get_by_id.return_value = application
+        job_posts.get_by_id.return_value = job_post
+
+        before = datetime.now(UTC)
+        await service.set_interview_booking_deadline_for_transition(
+            application.id, default_days=21
+        )
+
+        _, deadline = applications.set_interview_booking_deadline.call_args[0]
+        gap = deadline - before
+        assert timedelta(days=6, hours=23) < gap < timedelta(days=7, hours=1)
+
+    async def test_noop_if_application_missing(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.get_by_id.return_value = None
+
+        await service.set_interview_booking_deadline_for_transition(
+            uuid.uuid4(), default_days=21
+        )
+
+        applications.set_interview_booking_deadline.assert_not_called()
+        uow.commit.assert_not_called()
+
+
+class TestDisqualifyInterviewOverdue:
+    async def test_disqualifies_an_interview_stage_application(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.INTERVIEW)
+        applications.get_by_id.return_value = application
+
+        await service.disqualify_interview_overdue(application.id)
+
+        applications.compare_and_set_status.assert_called_once_with(
+            application.id,
+            expected=ApplicationStatus.INTERVIEW.value,
+            new=ApplicationStatus.DISQUALIFIED.value,
+        )
+        uow.commit.assert_called_once()
+
+    async def test_idempotent_noop_if_already_moved_past_interview(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.SUCCESS)
+        applications.get_by_id.return_value = application
+
+        await service.disqualify_interview_overdue(application.id)
+
+        applications.compare_and_set_status.assert_not_called()
+        uow.commit.assert_not_called()
+
+    async def test_noop_if_application_missing(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.get_by_id.return_value = None
+
+        await service.disqualify_interview_overdue(uuid.uuid4())
+
+        applications.compare_and_set_status.assert_not_called()
+
+
 class TestStats:
     async def test_zero_fills_all_statuses_and_totals(self):
         service, applications, job_posts, role_permissions, uow = make_service()

@@ -9,6 +9,8 @@ from app.domains.tags.schemas import TagOut
 
 _Salary = Decimal | None
 _ASSESSMENT_WINDOW = Field(default=4, ge=1, le=90)
+# NULL = use InterviewConfig.interview_booking_days (the global default).
+_INTERVIEW_BOOKING_DAYS = Field(default=None, ge=1, le=120)
 
 
 class _SalaryRangeMixin(BaseModel):
@@ -31,6 +33,8 @@ class JobPostCreate(_SalaryRangeMixin):
     description: str
     responsibilities: str
     qualifications: str
+    show_salary: bool = False
+    show_tags: bool = False
     currency: Currency = Currency.PHP
     employment_type: EmploymentType
     status: JobPostStatus = JobPostStatus.DRAFT
@@ -39,6 +43,7 @@ class JobPostCreate(_SalaryRangeMixin):
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = Field(default_factory=list)
     assessment_window_days: int = _ASSESSMENT_WINDOW
+    interview_booking_days: int | None = _INTERVIEW_BOOKING_DAYS
     pre_assessment_template_id: uuid.UUID | None = None
     culture_fit_template_id: uuid.UUID | None = None
     technical_assessment_template_id: uuid.UUID | None = None
@@ -49,12 +54,15 @@ class JobPostUpdate(_SalaryRangeMixin):
     description: str
     responsibilities: str
     qualifications: str
+    show_salary: bool = False
+    show_tags: bool = False
     currency: Currency = Currency.PHP
     employment_type: EmploymentType
     status: JobPostStatus
     company_address_id: uuid.UUID
     position_id: uuid.UUID
     assessment_window_days: int = _ASSESSMENT_WINDOW
+    interview_booking_days: int | None = _INTERVIEW_BOOKING_DAYS
 
 
 class JobPostStatsOut(BaseModel):
@@ -74,6 +82,8 @@ class JobPostOut(BaseModel):
     qualifications: str
     salary_min: Decimal | None
     salary_max: Decimal | None
+    show_salary: bool
+    show_tags: bool
     currency: str
     employment_type: str
     status: str
@@ -85,6 +95,7 @@ class JobPostOut(BaseModel):
     position_id: uuid.UUID
     position_title: str
     assessment_window_days: int
+    interview_booking_days: int | None
     tags: list[TagOut]
     excluded_job_post_ids: list[uuid.UUID]
     pre_assessment_template_id: uuid.UUID | None

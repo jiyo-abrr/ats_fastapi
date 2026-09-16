@@ -3,6 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -37,6 +38,11 @@ class JobPost(Base):
             "currency IN (" + ", ".join(f"'{c.value}'" for c in Currency) + ")",
             name="ck_job_posts_currency",
         ),
+        CheckConstraint(
+            "interview_booking_days IS NULL OR "
+            "(interview_booking_days >= 1 AND interview_booking_days <= 120)",
+            name="ck_job_posts_interview_booking_days",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -48,6 +54,12 @@ class JobPost(Base):
     qualifications: Mapped[str] = mapped_column(String(10000), nullable=False)
     salary_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     salary_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    show_salary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    show_tags: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, default=Currency.PHP.value
     )
@@ -68,6 +80,13 @@ class JobPost(Base):
     # Application.assessment_deadline at apply-time.
     assessment_window_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=4
+    )
+    # Overrides InterviewConfig.interview_booking_days (the global default)
+    # for this job post's applications — NULL means "use the global default".
+    # Copied onto Application.interview_booking_deadline when an application
+    # moves prescreening -> interview (see the applications router).
+    interview_booking_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

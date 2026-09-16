@@ -1,5 +1,7 @@
 import os
 import uuid
+from datetime import UTC, datetime
+from pathlib import PurePosixPath
 
 import jwt
 from sqlalchemy.exc import IntegrityError
@@ -14,9 +16,10 @@ from app.core.security import (
     decode_token,
     hash_password,
     password_exceeds_max_length,
+    password_meets_complexity,
     verify_password,
 )
-from app.core.storage import upload_object
+from app.core.storage import ObjectNotFoundError, get_object, upload_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.auth import entities
 from app.domains.auth.exceptions import (
@@ -26,7 +29,10 @@ from app.domains.auth.exceptions import (
     InvalidRefreshTokenError,
     InvalidRoleForActionError,
     PasswordTooLongError,
+    PasswordTooWeakError,
+    ResumeScreeningConsentRequiredError,
     ResumeTooLargeError,
+    ResumeUnavailableError,
     UnsupportedResumeTypeError,
     UserNotFoundError,
 )
@@ -80,6 +86,12 @@ class AuthService:
                 "Password must be at most 72 bytes long "
                 "(shorter for passwords with non-ASCII characters)."
             )
+        if not password_meets_complexity(password):
+            raise PasswordTooWeakError(
+                "Password must be at least 8 characters and include an "
+                "uppercase letter, a lowercase letter, a number, and a "
+                "special character."
+            )
 
     @staticmethod
     async def _hash_password(password: str) -> str:
@@ -110,7 +122,13 @@ class AuthService:
         resume_filename: str,
         resume_content_type: str | None,
         resume_bytes: bytes,
+        resume_screening_consent: bool,
     ) -> SignupResponse:
+        if not resume_screening_consent:
+            raise ResumeScreeningConsentRequiredError(
+                "You must agree to let us use your résumé for screening to "
+                "create an account"
+            )
         self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
             raise EmailAlreadyRegisteredError("Email is already registered")
@@ -151,6 +169,7 @@ class AuthService:
                 role_id=applicant_role.id,
                 role=applicant_role.name,
                 resume_object_key=object_key,
+                resume_screening_consent_at=datetime.now(UTC),
             )
         )
         await self._commit_translating_email_conflict()
@@ -203,6 +222,25 @@ class AuthService:
         if user is None:
             raise UserNotFoundError(f"User '{user_id}' not found")
         return UserOut.model_validate(user)
+
+    async def get_own_resume(
+        self, current_user: entities.User
+    ) -> tuple[bytes, str, str]:
+        """`(bytes, content_type, filename)` for the current user's own résumé
+        (the one attached at signup). MinIO is sync — wrapped in a threadpool
+        like the upload."""
+        if current_user.resume_object_key is None:
+            raise ResumeUnavailableError("No résumé is on file for this account")
+        try:
+            data, content_type = await run_in_threadpool(
+                get_object, settings.minio_bucket, current_user.resume_object_key
+            )
+        except ObjectNotFoundError as exc:
+            raise ResumeUnavailableError(
+                "Your résumé is not available right now"
+            ) from exc
+        filename = PurePosixPath(current_user.resume_object_key).name or "resume"
+        return data, content_type, filename
 
     async def update_user(
         self,

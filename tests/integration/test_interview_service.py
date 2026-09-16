@@ -14,6 +14,8 @@ from app.domains.interviews.availability_repository import (
 from app.domains.interviews.availability_service import InterviewAvailabilityService
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
+    InterviewAlreadyConfirmedError,
+    InterviewNotConfirmedError,
     SlotNotOnRequestError,
     SlotUnavailableError,
 )
@@ -172,13 +174,12 @@ async def test_reconfirming_the_same_slot_is_idempotent(db_session):
     assert first.selected_slot_id == second.selected_slot_id == slot_id
 
 
-async def test_reselecting_a_different_slot_replaces_the_confirmation(db_session):
-    """Regression: `ux_interview_slots_one_selected` is a partial unique
-    *index*, not a deferrable constraint — Postgres checks it per statement.
-    Clearing the old selection and setting the new one must not both land in
-    the DB with the new one visible before the old one is cleared, or this
-    (a candidate simply changing their mind about the time) fails with a
-    spurious "just taken" on every attempt, not just a real race."""
+async def test_reselecting_a_different_slot_is_rejected_once_confirmed(db_session):
+    """A candidate can't unilaterally move off a time they already
+    confirmed — that could silently invalidate HR's calendar or a slot
+    another candidate passed on. HR must clear and re-send to reschedule
+    (re-confirming the *same* slot is still a no-op — see the idempotent
+    test above)."""
     app, applicant, hr = await _interview_stage_application(db_session)
     svc = _make_service(db_session)
     slot_a = _future(days=2, hours=1)
@@ -197,13 +198,72 @@ async def test_reselecting_a_different_slot_replaces_the_confirmation(db_session
     id_a = next(s.id for s in request.slots if s.starts_at == slot_a)
     id_b = next(s.id for s in request.slots if s.starts_at == slot_b)
 
+    confirmed = await svc.select_slot(
+        app.id, SelectSlotIn(slot_id=id_a), selected_by_user_id=applicant.id
+    )
+    assert confirmed.selected_slot_id == id_a
+
+    with pytest.raises(InterviewAlreadyConfirmedError):
+        await svc.select_slot(
+            app.id, SelectSlotIn(slot_id=id_b), selected_by_user_id=applicant.id
+        )
+
+    # The original confirmation must still stand, untouched.
+    unchanged = await svc.get_for_application(app.id)
+    assert unchanged.selected_slot_id == id_a
+
+
+async def test_reopen_unconfirms_but_keeps_the_rest_of_the_offer(db_session):
+    """HR/admin's path to letting a candidate reschedule without re-entering
+    mode/duration/notes/times — the lighter alternative to delete+resend."""
+    app, applicant, hr = await _interview_stage_application(db_session)
+    svc = _make_service(db_session)
+    slot_a = _future(days=2, hours=1)
+    slot_b = _future(days=2, hours=3)
+    request = await svc.set_request(
+        app.id,
+        InterviewRequestIn(
+            mode="video",
+            notes="Bring a laptop",
+            slots=[
+                InterviewSlotIn(starts_at=slot_a),
+                InterviewSlotIn(starts_at=slot_b),
+            ],
+        ),
+        created_by_user_id=hr.id,
+    )
+    id_a = next(s.id for s in request.slots if s.starts_at == slot_a)
+    id_b = next(s.id for s in request.slots if s.starts_at == slot_b)
     await svc.select_slot(
         app.id, SelectSlotIn(slot_id=id_a), selected_by_user_id=applicant.id
     )
-    changed = await svc.select_slot(
+
+    reopened = await svc.reopen(app.id)
+    assert reopened.selected_slot_id is None
+    assert reopened.selected_at is None
+    assert reopened.notes == "Bring a laptop"
+    assert {s.id for s in reopened.slots} == {id_a, id_b}
+
+    # The candidate can now confirm a (possibly different) time again.
+    confirmed = await svc.select_slot(
         app.id, SelectSlotIn(slot_id=id_b), selected_by_user_id=applicant.id
     )
-    assert changed.selected_slot_id == id_b
+    assert confirmed.selected_slot_id == id_b
+
+
+async def test_reopen_without_a_confirmation_is_rejected(db_session):
+    app, _applicant, hr = await _interview_stage_application(db_session)
+    svc = _make_service(db_session)
+    await svc.set_request(
+        app.id,
+        InterviewRequestIn(
+            mode="video", slots=[InterviewSlotIn(starts_at=_future(days=2))]
+        ),
+        created_by_user_id=hr.id,
+    )
+
+    with pytest.raises(InterviewNotConfirmedError):
+        await svc.reopen(app.id)
 
 
 async def test_editing_duration_keeps_ends_at_in_sync(db_session):

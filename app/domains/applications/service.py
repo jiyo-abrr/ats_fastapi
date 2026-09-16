@@ -342,3 +342,46 @@ class ApplicationService:
             new=ApplicationStatus.DISQUALIFIED.value,
         )
         await self.uow.commit()
+
+    async def set_interview_booking_deadline_for_transition(
+        self, application_id: uuid.UUID, *, default_days: int
+    ) -> None:
+        """Called once, right after an application moves prescreening ->
+        interview (see the router) — starts the candidate's window to book a
+        slot before disqualify_interview_overdue() sweeps them out.
+
+        The job post the application belongs to may override the global
+        `default_days` (InterviewConfig.interview_booking_days) with its own
+        `interview_booking_days` — same NULL-means-"use the default" pattern
+        as availability windows/logistics presets. No-op if the application
+        or its job post can't be found (shouldn't happen; a defensive guard,
+        not an expected path)."""
+        application = await self.applications.get_by_id(application_id)
+        if application is None:
+            return
+        job_post = await self.job_posts.get_by_id(application.job_post_id)
+        days = (
+            job_post.interview_booking_days
+            if job_post is not None and job_post.interview_booking_days is not None
+            else default_days
+        )
+        deadline = datetime.now(UTC) + timedelta(days=days)
+        await self.applications.set_interview_booking_deadline(
+            application_id, deadline
+        )
+        await self.uow.commit()
+
+    async def disqualify_interview_overdue(self, application_id: uuid.UUID) -> None:
+        """System-only — called from the interview-stage disqualification
+        sweep for applications whose interview_booking_deadline passed with no
+        slot picked. Idempotent no-op if a human (or the applicant confirming
+        a slot) already moved it out of `interview`."""
+        application = await self.applications.get_by_id(application_id)
+        if application is None or application.status != ApplicationStatus.INTERVIEW:
+            return
+        await self.applications.compare_and_set_status(
+            application_id,
+            expected=ApplicationStatus.INTERVIEW.value,
+            new=ApplicationStatus.DISQUALIFIED.value,
+        )
+        await self.uow.commit()

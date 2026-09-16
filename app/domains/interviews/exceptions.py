@@ -23,6 +23,17 @@ class SlotUnavailableError(ConflictError):
     open."""
 
 
+class InterviewAlreadyConfirmedError(ConflictError):
+    """The candidate already confirmed a time. Self-service rescheduling is
+    disabled — a change could silently invalidate HR's calendar or a slot
+    another candidate passed on; HR must clear and re-send instead."""
+
+
+class InterviewNotConfirmedError(ConflictError):
+    """Reopen was called but nothing is currently confirmed on this
+    interview — there's nothing to un-confirm."""
+
+
 class SlotNotOnRequestError(ValidationError):
     """The referenced slot is not part of this interview request."""
 

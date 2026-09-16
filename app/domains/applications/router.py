@@ -6,7 +6,7 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.http_headers import content_disposition_attachment
+from app.core.http_headers import content_disposition_inline
 from app.domains.applications.dependencies import get_application_service
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.schemas import (
@@ -234,7 +234,7 @@ async def download_resume(
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Content-Disposition": content_disposition_attachment(filename)},
+        headers={"Content-Disposition": content_disposition_inline(filename)},
     )
 
 
@@ -267,6 +267,14 @@ async def update_application_status(
         await interviews.ensure_default_request(
             application_id, created_by_user_id=current_user.id
         )
+        # Starts the candidate's window to book a slot — past this,
+        # disqualify_overdue_interviews auto-disqualifies them. The job post
+        # may override the global default with its own interview_booking_days.
+        config = await interviews.get_config()
+        await service.set_interview_booking_deadline_for_transition(
+            application_id, default_days=config.interview_booking_days
+        )
+        result = await service.get(application_id, current_user)
     return result
 
 

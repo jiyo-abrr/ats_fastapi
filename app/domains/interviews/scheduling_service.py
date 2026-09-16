@@ -18,7 +18,9 @@ from app.domains.interviews import entities
 from app.domains.interviews.availability_service import InterviewAvailabilityService
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
+    InterviewAlreadyConfirmedError,
     InterviewApplicationNotFoundError,
+    InterviewNotConfirmedError,
     InterviewRequestNotFoundError,
     SlotNotOnRequestError,
     SlotUnavailableError,
@@ -101,6 +103,12 @@ class InterviewService:
         if request is None:
             return None
         return await self._to_out(request)
+
+    async def get_config(self) -> entities.InterviewConfig:
+        """Thin passthrough for callers (the applications router, computing a
+        newly-interview-stage application's interview_booking_deadline) that
+        only need the booking-rules config, not a full availability payload."""
+        return await self.availability.get_config()
 
     async def ensure_default_request(
         self, application_id: uuid.UUID, *, created_by_user_id: uuid.UUID
@@ -237,6 +245,16 @@ class InterviewService:
         ):
             return await self._to_out(request)
 
+        # Once confirmed, the candidate can't unilaterally move to a
+        # *different* time — that would silently invalidate whatever HR (or
+        # another candidate) planned around the original slot. HR must clear
+        # and re-send to reschedule.
+        if already is not None:
+            raise InterviewAlreadyConfirmedError(
+                "You've already confirmed a time for this interview. "
+                "Contact the hiring team if you need to reschedule."
+            )
+
         if payload.slot_id is not None:
             target = next((s for s in slots if s.id == payload.slot_id), None)
             if target is None:
@@ -312,6 +330,29 @@ class InterviewService:
     async def delete_request(self, application_id: uuid.UUID) -> None:
         await self.interviews.delete_request(application_id)
         await self.uow.commit()
+
+    async def reopen(self, application_id: uuid.UUID) -> InterviewRequestOut:
+        """HR/admin: un-confirm the candidate's selected slot so they can
+        pick again, while keeping the rest of the interview (mode, duration,
+        notes, proposed times / self-schedule setting) intact — the lighter
+        alternative to delete_request + set_request, which would make HR
+        re-enter everything just to let a candidate change their mind."""
+        await self._require_application_in_interview(application_id)
+        request = await self.interviews.get_request_with_slots(application_id)
+        if request is None:
+            raise InterviewRequestNotFoundError(
+                "No interview has been scheduled for this application yet"
+            )
+        slots = request.slots or []
+        if not any(s.selected_at is not None for s in slots):
+            raise InterviewNotConfirmedError(
+                "This interview isn't confirmed yet — there's nothing to reopen."
+            )
+        for slot in slots:
+            slot.selected_at = None
+        await self.interviews.sync_slot_selections(slots)
+        await self.uow.commit()
+        return await self.get_for_application(application_id)  # type: ignore[return-value]
 
     async def statuses_for_job_post(
         self, job_post_id: uuid.UUID
