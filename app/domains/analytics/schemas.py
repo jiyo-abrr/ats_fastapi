@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -95,6 +95,82 @@ class EvaluationsAnalyticsOut(BaseModel):
     evaluation_activity: list[ActivityPointOut]
     fit_score_bands: list[StatusCountOut]
     score_dimensions: list[EvaluationDimensionOut]
+
+
+class JobPostReportOut(BaseModel):
+    """One row of the per-posting recruitment report — see
+    AnalyticsRepository.job_post_reports()."""
+
+    id: uuid.UUID
+    job_title: str
+    status: str
+    published_at: datetime | None
+    closed_at: datetime | None
+    expires_at: datetime | None
+    applied: int
+    screened: int
+    passed: int
+    rejected: int
+    accepted: int
+    average_score: float | None
+    highest_score: int | None
+    recurring_applicants: int
+    turnout: int
+    engagement_rate: float
+    posting_duration_days: int | None
+    recommendation: str | None
+
+
+class RecurringApplicantApplicationOut(BaseModel):
+    job_post_id: uuid.UUID
+    job_title: str
+    status: str
+    created_at: datetime
+
+
+class RecurringApplicantOut(BaseModel):
+    applicant_id: uuid.UUID
+    name: str
+    email: str
+    application_count: int
+    applications: list[RecurringApplicantApplicationOut]
+
+
+class RankedJobPostOut(BaseModel):
+    """One entry in a top-5 ranking (most turnout, most engaging, longest
+    posting) — `value` means whatever the surrounding list is ranked by
+    (turnout count, engagement %, or duration in days)."""
+
+    id: uuid.UUID
+    job_title: str
+    value: float
+
+
+class StrongestRecommendationOut(BaseModel):
+    id: uuid.UUID
+    job_title: str
+    recommendation: str
+
+
+class RecommendationCountOut(BaseModel):
+    recommendation: str
+    count: int
+
+
+class RecruitmentInsightsOut(BaseModel):
+    """The recruitment report's "Key Recruitment Insights" summary — see
+    AnalyticsRepository.recruitment_insights()."""
+
+    top_turnout: list[RankedJobPostOut]
+    top_engagement: list[RankedJobPostOut]
+    top_duration: list[RankedJobPostOut]
+    strongest_recommendation: StrongestRecommendationOut | None
+    recommendation_distribution: list[RecommendationCountOut]
+    recurring_applicants_total: int
+    total_applied: int
+    total_screened: int
+    total_passed: int
+    candidates_passed_rate: float
 
 
 class LocationCountOut(BaseModel):

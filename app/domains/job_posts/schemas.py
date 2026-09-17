@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domains.interviews.enums import InterviewMode
 from app.domains.job_posts.enums import Currency, EmploymentType, JobPostStatus
 from app.domains.tags.schemas import TagOut
 
@@ -44,6 +45,11 @@ class JobPostCreate(_SalaryRangeMixin):
     excluded_job_post_ids: list[uuid.UUID] = Field(default_factory=list)
     assessment_window_days: int = _ASSESSMENT_WINDOW
     interview_booking_days: int | None = _INTERVIEW_BOOKING_DAYS
+    # NULL = use InterviewConfig.default_mode (the global default).
+    default_interview_mode: InterviewMode | None = None
+    # HR-set target end date — informational only, independent of when the
+    # post is actually closed.
+    expires_at: datetime | None = None
     pre_assessment_template_id: uuid.UUID | None = None
     culture_fit_template_id: uuid.UUID | None = None
     technical_assessment_template_id: uuid.UUID | None = None
@@ -63,6 +69,8 @@ class JobPostUpdate(_SalaryRangeMixin):
     position_id: uuid.UUID
     assessment_window_days: int = _ASSESSMENT_WINDOW
     interview_booking_days: int | None = _INTERVIEW_BOOKING_DAYS
+    default_interview_mode: InterviewMode | None = None
+    expires_at: datetime | None = None
 
 
 class JobPostStatsOut(BaseModel):
@@ -96,10 +104,14 @@ class JobPostOut(BaseModel):
     position_title: str
     assessment_window_days: int
     interview_booking_days: int | None
+    default_interview_mode: InterviewMode | None
     tags: list[TagOut]
     excluded_job_post_ids: list[uuid.UUID]
     pre_assessment_template_id: uuid.UUID | None
     culture_fit_template_id: uuid.UUID | None
     technical_assessment_template_id: uuid.UUID | None
+    published_at: datetime | None
+    closed_at: datetime | None
+    expires_at: datetime | None
     created_at: datetime
     updated_at: datetime

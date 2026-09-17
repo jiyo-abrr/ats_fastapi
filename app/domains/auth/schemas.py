@@ -26,6 +26,7 @@ class UserOut(BaseModel):
     updated_at: datetime
     resume_object_key: str | None = Field(default=None, exclude=True)
     resume_screening_consent_at: datetime | None = None
+    data_privacy_consent_at: datetime | None = None
 
     @computed_field
     @property
@@ -57,6 +58,15 @@ class UserUpdateRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    # Optional — when given, this device's refresh token is revoked after a
+    # successful change, so it can't silently refresh past the old password
+    # (see AuthService.logout, called from the router after change_password).
+    refresh_token: str | None = None
 
 
 class TokenResponse(BaseModel):

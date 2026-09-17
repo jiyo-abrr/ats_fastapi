@@ -24,10 +24,12 @@ from app.core.unit_of_work import UnitOfWork
 from app.domains.auth import entities
 from app.domains.auth.exceptions import (
     AccountDeactivatedError,
+    DataPrivacyConsentRequiredError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     InvalidRoleForActionError,
+    NewPasswordMatchesCurrentError,
     PasswordTooLongError,
     PasswordTooWeakError,
     ResumeScreeningConsentRequiredError,
@@ -123,11 +125,17 @@ class AuthService:
         resume_content_type: str | None,
         resume_bytes: bytes,
         resume_screening_consent: bool,
+        data_privacy_consent: bool,
     ) -> SignupResponse:
         if not resume_screening_consent:
             raise ResumeScreeningConsentRequiredError(
                 "You must agree to let us use your résumé for screening to "
                 "create an account"
+            )
+        if not data_privacy_consent:
+            raise DataPrivacyConsentRequiredError(
+                "You must agree to our Data Privacy Notice to create an "
+                "account"
             )
         self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
@@ -170,6 +178,7 @@ class AuthService:
                 role=applicant_role.name,
                 resume_object_key=object_key,
                 resume_screening_consent_at=datetime.now(UTC),
+                data_privacy_consent_at=datetime.now(UTC),
             )
         )
         await self._commit_translating_email_conflict()
@@ -267,6 +276,32 @@ class AuthService:
         await self.users.update(user)
         await self._commit_translating_email_conflict()
         return UserOut.model_validate(await self.users.get_by_id(user_id))
+
+    async def change_password(
+        self,
+        user_id: uuid.UUID,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User '{user_id}' not found")
+
+        if not await self._verify_password(current_password, user.password_hash):
+            raise InvalidCredentialsError("Current password is incorrect")
+
+        if new_password == current_password:
+            raise NewPasswordMatchesCurrentError(
+                "New password must be different from the current password"
+            )
+
+        self._validate_password(new_password)
+
+        await self.users.set_password_hash(
+            user_id, await self._hash_password(new_password)
+        )
+        await self.uow.commit()
 
     async def set_applicant_active(
         self, user_id: uuid.UUID, *, is_active: bool

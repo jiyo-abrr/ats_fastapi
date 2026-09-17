@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -72,6 +73,15 @@ class Application(Base):
     # touched again once set — there's no "extend" action for this one.
     interview_booking_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # HR explicitly bypassed AI evaluation for this application — set when
+    # moving prescreening -> interview without an AI evaluation, or toggled
+    # directly via PATCH /applications/{id}/hr-assessed. Excludes the
+    # application from the evaluation pack export and the evaluations CSV;
+    # it still appears in the Compare tab's AI evaluation matrix, with a
+    # note in place of the (nonexistent) AI evaluation. Reversible.
+    hr_assessed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

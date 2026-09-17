@@ -1,4 +1,8 @@
-from app.domains.applications.enums import allowed_transitions_for, can_withdraw
+from app.domains.applications.enums import (
+    EVALUATION_ELIGIBLE_STATUSES,
+    allowed_transitions_for,
+    can_withdraw,
+)
 
 
 class TestAllowedTransitionsFor:
@@ -27,4 +31,15 @@ class TestCanWithdraw:
         assert not any(
             can_withdraw(s)
             for s in ("denied", "success", "failed", "withdrawn", "disqualified", "x")
+        )
+
+
+class TestEvaluationEligibleStatuses:
+    def test_excludes_withdrawn_and_disqualified(self):
+        assert "withdrawn" not in EVALUATION_ELIGIBLE_STATUSES
+        assert "disqualified" not in EVALUATION_ELIGIBLE_STATUSES
+
+    def test_includes_every_other_status(self):
+        assert EVALUATION_ELIGIBLE_STATUSES == sorted(
+            ["applied", "prescreening", "interview", "denied", "success", "failed"]
         )

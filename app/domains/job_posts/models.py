@@ -43,6 +43,11 @@ class JobPost(Base):
             "(interview_booking_days >= 1 AND interview_booking_days <= 120)",
             name="ck_job_posts_interview_booking_days",
         ),
+        CheckConstraint(
+            "default_interview_mode IS NULL OR "
+            "default_interview_mode IN ('video', 'onsite', 'phone')",
+            name="ck_job_posts_default_interview_mode",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -87,6 +92,30 @@ class JobPost(Base):
     # moves prescreening -> interview (see the applications router).
     interview_booking_days: Mapped[int | None] = mapped_column(
         Integer, nullable=True
+    )
+    # Overrides InterviewConfig.default_mode (the global default) for the
+    # Mode the interview scheduler pre-selects for this job post's
+    # interviews — NULL means "use the global default".
+    default_interview_mode: Mapped[str | None] = mapped_column(
+        String(10), nullable=True
+    )
+    # Set once, the first time status becomes "published" — never cleared by
+    # a later status change, so it always reflects when the posting first
+    # went live (see JobPostService.create/update). Recruitment-report field.
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Set when status becomes "closed"; cleared if the posting is reopened
+    # (moved to any other status), since a stale close date would otherwise
+    # misreport posting duration for a re-opened post.
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # HR-set target end date — optional, independent of closed_at (the
+    # actual date it was closed). Purely informational for the recruitment
+    # report; nothing enforces applications stop at this date.
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.core.unit_of_work import UnitOfWork
@@ -151,6 +152,8 @@ class JobPostService:
         excluded_job_post_ids: list[uuid.UUID],
         assessment_window_days: int = 4,
         interview_booking_days: int | None = None,
+        default_interview_mode: str | None = None,
+        expires_at: datetime | None = None,
         pre_assessment_template_id: uuid.UUID | None = None,
         culture_fit_template_id: uuid.UUID | None = None,
         technical_assessment_template_id: uuid.UUID | None = None,
@@ -232,6 +235,14 @@ class JobPostService:
                 position_title=position.title,
                 assessment_window_days=assessment_window_days,
                 interview_booking_days=interview_booking_days,
+                default_interview_mode=default_interview_mode,
+                expires_at=expires_at,
+                published_at=(
+                    datetime.now(UTC) if status == JobPostStatus.PUBLISHED else None
+                ),
+                closed_at=(
+                    datetime.now(UTC) if status == JobPostStatus.CLOSED else None
+                ),
             )
         )
         # Flush before staging tag/exclusion rows: they reference job_posts.id
@@ -278,6 +289,8 @@ class JobPostService:
         position_id: uuid.UUID,
         assessment_window_days: int = 4,
         interview_booking_days: int | None = None,
+        default_interview_mode: str | None = None,
+        expires_at: datetime | None = None,
     ) -> entities.JobPost:
         existing = await self.get(job_post_id)
         if status == JobPostStatus.PUBLISHED:
@@ -297,6 +310,19 @@ class JobPostService:
             )
         address = await self._require_address(company_address_id)
         position = await self._require_position(position_id)
+
+        # published_at is set once, the first time a post goes live, and
+        # never touched again — a later draft->published->draft->published
+        # cycle still reports the original go-live date. closed_at tracks
+        # the *current* close (cleared on reopen, since a stale value would
+        # misreport posting duration for a reopened post).
+        published_at = existing.published_at
+        if status == JobPostStatus.PUBLISHED and published_at is None:
+            published_at = datetime.now(UTC)
+        if status == JobPostStatus.CLOSED:
+            closed_at = existing.closed_at or datetime.now(UTC)
+        else:
+            closed_at = None
 
         await self.job_posts.update(
             entities.JobPost(
@@ -321,6 +347,10 @@ class JobPostService:
                 position_title=position.title,
                 assessment_window_days=assessment_window_days,
                 interview_booking_days=interview_booking_days,
+                default_interview_mode=default_interview_mode,
+                expires_at=expires_at,
+                published_at=published_at,
+                closed_at=closed_at,
             )
         )
         await self.uow.commit()

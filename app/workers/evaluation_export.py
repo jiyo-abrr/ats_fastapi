@@ -32,6 +32,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.queue import EVALUATION_EXPORT_DLQ, EVALUATION_EXPORT_QUEUE, broker
 from app.core.storage import ObjectNotFoundError, get_object, upload_object
 from app.core.unit_of_work import UnitOfWork
+from app.domains.applications.enums import EVALUATION_ELIGIBLE_STATUSES
 from app.domains.applications.models import Application as ApplicationModel
 from app.domains.applications.repository import ApplicationRepository
 from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
@@ -129,10 +130,21 @@ async def _run_export(db, job) -> str:
     if job_post is None:
         raise ValueError(f"job post '{job.job_post_id}' no longer exists")
 
-    statuses = job.status_filter.split(",") if job.status_filter else None
-    query = await applications.list_for_review(
-        job_post_id=job.job_post_id, statuses=statuses
+    # Same default as the sync /export route: every status except
+    # withdrawn/disqualified, unless the caller explicitly filtered.
+    statuses = (
+        job.status_filter.split(",")
+        if job.status_filter
+        else EVALUATION_ELIGIBLE_STATUSES
     )
+    # Always excludes hr_assessed applications — same rule as the sync
+    # /export route (no override for this one; it's an explicit HR
+    # decision, not a pipeline stage a ?status= filter could restore).
+    query = (
+        await applications.list_for_review(
+            job_post_id=job.job_post_id, statuses=statuses
+        )
+    ).where(ApplicationModel.hr_assessed.is_(False))
     rows = (await db.execute(query.limit(_ASYNC_EXPORT_MAX_APPLICANTS))).all()
 
     resume_keys: dict[uuid.UUID, str | None] = {}

@@ -345,6 +345,56 @@ class TestUpdateStatus:
         with pytest.raises(InvalidApplicationStatusTransitionError):
             await service.update_status(application.id, ApplicationStatus.DISQUALIFIED)
 
+    async def test_hr_assessed_true_sets_the_flag_alongside_the_move(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.PRESCREENING)
+        applications.get_by_id.return_value = application
+
+        await service.update_status(
+            application.id, ApplicationStatus.INTERVIEW, hr_assessed=True
+        )
+
+        applications.set_hr_assessed.assert_called_once_with(application.id, True)
+
+    async def test_hr_assessed_false_leaves_the_flag_untouched(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.PRESCREENING)
+        applications.get_by_id.return_value = application
+
+        await service.update_status(application.id, ApplicationStatus.INTERVIEW)
+
+        applications.set_hr_assessed.assert_not_called()
+
+
+class TestSetHrAssessed:
+    async def test_marks_and_returns_the_updated_application(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(status=ApplicationStatus.INTERVIEW)
+        applications.get_by_id.return_value = application
+
+        await service.set_hr_assessed(application.id, hr_assessed=True)
+
+        applications.set_hr_assessed.assert_called_once_with(application.id, True)
+        uow.commit.assert_called_once()
+
+    async def test_reversible_to_false(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        application = make_application(
+            status=ApplicationStatus.INTERVIEW, hr_assessed=True
+        )
+        applications.get_by_id.return_value = application
+
+        await service.set_hr_assessed(application.id, hr_assessed=False)
+
+        applications.set_hr_assessed.assert_called_once_with(application.id, False)
+
+    async def test_raises_when_application_not_found(self):
+        service, applications, job_posts, role_permissions, uow = make_service()
+        applications.get_by_id.return_value = None
+
+        with pytest.raises(ApplicationNotFoundError):
+            await service.set_hr_assessed(uuid.uuid4(), hr_assessed=True)
+
 
 class TestExtendAssessmentDeadline:
     async def test_extends_with_absolute_new_deadline(self):

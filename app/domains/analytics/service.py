@@ -35,3 +35,14 @@ class AnalyticsService:
             }
             for c in counts
         ]
+
+    async def job_post_reports(self, *, position_id: uuid.UUID | None) -> list[dict]:
+        return await self.analytics.job_post_reports(position_id=position_id)
+
+    async def recruitment_insights(self, *, position_id: uuid.UUID | None) -> dict:
+        return await self.analytics.recruitment_insights(position_id=position_id)
+
+    async def recurring_applicants(
+        self, *, position_id: uuid.UUID | None
+    ) -> list[dict]:
+        return await self.analytics.recurring_applicants(position_id=position_id)

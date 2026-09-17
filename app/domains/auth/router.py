@@ -24,6 +24,7 @@ from app.domains.auth.models import User as UserModel
 from app.domains.auth.repository import UserRepository
 from app.domains.auth.schemas import (
     AccessTokenResponse,
+    ChangePasswordRequest,
     CreateHrAccountRequest,
     LoginRequest,
     RefreshRequest,
@@ -56,6 +57,7 @@ async def signup(
     password: str = Form(...),
     resume: UploadFile = File(...),
     resume_screening_consent: bool = Form(...),
+    data_privacy_consent: bool = Form(...),
     auth_service: AuthService = Depends(get_auth_service),
 ) -> SignupResponse:
     # Read with a hard cap so an oversized upload can't balloon memory before
@@ -73,6 +75,7 @@ async def signup(
         resume_content_type=resume.content_type,
         resume_bytes=resume_bytes,
         resume_screening_consent=resume_screening_consent,
+        data_privacy_consent=data_privacy_consent,
     )
 
 
@@ -192,6 +195,28 @@ async def update_me(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> UserOut:
     return await auth_service.update_user(current_user.id, **payload.model_dump())
+
+
+@router.patch(
+    "/me/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("change-password", limit=5, window_seconds=60))],
+)
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: entities.User = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> None:
+    await auth_service.change_password(
+        current_user.id,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    # This device's refresh token is revoked so it can't silently refresh
+    # past the old password — the current access token still works until it
+    # naturally expires, but the next refresh attempt forces a real login.
+    if payload.refresh_token:
+        await auth_service.logout(payload.refresh_token)
 
 
 @router.get("/me/resume")

@@ -14,8 +14,12 @@ from app.core.database import get_db
 from app.core.queue import get_broker
 from app.core.storage import ObjectNotFoundError, get_object
 from app.domains.applications.dependencies import get_application_service
-from app.domains.applications.enums import ApplicationStatus
+from app.domains.applications.enums import (
+    EVALUATION_ELIGIBLE_STATUSES,
+    ApplicationStatus,
+)
 from app.domains.applications.exceptions import ResumeUnavailableError
+from app.domains.applications.models import Application as ApplicationModel
 from app.domains.applications.service import ApplicationService
 from app.domains.assessments.attempts.dependencies import get_assessment_service
 from app.domains.assessments.attempts.service import AssessmentService
@@ -72,12 +76,23 @@ async def export_evaluation_pack(
     """ZIP for external AI evaluation: job spec + rubric + every applicant's
     résumé and assessment answers. Bounded by applicant count and total bytes —
     over either cap, use `POST /applications/export/async` instead, or narrow
-    with `?status=`."""
+    with `?status=`.
+
+    Defaults to every status except withdrawn/disqualified — those are out
+    of the pipeline, so there's nothing left to evaluate them for. Pass an
+    explicit `?status=` (including withdrawn/disqualified) to override.
+    Always excludes applications HR has marked "assessed by HR" (bypassed
+    AI evaluation) — there's no ?override for that one, since it's an
+    explicit HR decision, not a pipeline stage."""
     job = await job_post_service.get(job_post_id)
-    query = await service.list_for_review(
-        job_post_id=job_post_id,
-        statuses=[s.value for s in status] if status else None,
-    )
+    query = (
+        await service.list_for_review(
+            job_post_id=job_post_id,
+            statuses=(
+                [s.value for s in status] if status else EVALUATION_ELIGIBLE_STATUSES
+            ),
+        )
+    ).where(ApplicationModel.hr_assessed.is_(False))
     # Fetch one past the cap so an over-limit job post is a cheap 413, not a
     # full table scan.
     rows = (await db.execute(query.limit(EVALUATION_PACK_MAX + 1))).all()
@@ -205,8 +220,12 @@ async def job_evaluations(
     evaluations: EvaluationService = Depends(get_evaluation_service),
 ) -> Page[JobEvaluationRowOut]:
     """One row per applicant with their full latest AI evaluation (recommendation,
-    fit score, per-dimension scores) — for the Compare tab's side-by-side view."""
-    query = await service.list_for_review(job_post_id=job_post_id, statuses=None)
+    fit score, per-dimension scores) — for the Compare tab's side-by-side view.
+    Excludes withdrawn/disqualified applicants — they're out of the pipeline,
+    so there's no hiring decision left to inform."""
+    query = await service.list_for_review(
+        job_post_id=job_post_id, statuses=EVALUATION_ELIGIBLE_STATUSES
+    )
 
     async def _transform(rows):
         full = await evaluations.latest_full_for_applications([r.id for r in rows])
@@ -216,6 +235,8 @@ async def job_evaluations(
                 applicant_first_name=r.applicant_first_name,
                 applicant_last_name=r.applicant_last_name,
                 applicant_email=r.applicant_email,
+                status=r.status,
+                hr_assessed=r.hr_assessed,
                 evaluation=full.get(r.id),
             )
             for r in rows

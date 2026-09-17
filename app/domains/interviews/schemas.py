@@ -190,6 +190,9 @@ class InterviewConfigIn(BaseModel):
     # book a slot before being auto-disqualified — see
     # Application.interview_booking_deadline.
     interview_booking_days: int = Field(default=21, ge=1, le=120)
+    # Global fallback Mode the interview scheduler pre-selects for a job post
+    # with no `default_interview_mode` override of its own.
+    default_mode: InterviewMode = InterviewMode.ONSITE
 
     @field_validator("timezone")
     @classmethod
@@ -207,6 +210,7 @@ class InterviewConfigOut(BaseModel):
     min_notice_hours: int
     timezone: str
     interview_booking_days: int
+    default_mode: InterviewMode
 
 
 class LogisticsPresetIn(BaseModel):
@@ -347,6 +351,10 @@ class JobPostAvailabilityOut(BaseModel):
     config: InterviewConfigOut
     uses_custom_logistics: bool
     logistics_presets: list[LogisticsPresetOut]  # effective, per mode
+    # This job post's `default_interview_mode` override, or
+    # `InterviewConfigOut.default_mode` when it has none — what the
+    # scheduler should pre-select for a new interview.
+    default_mode: InterviewMode
 
 
 class OpenSlotOut(BaseModel):

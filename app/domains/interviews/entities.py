@@ -21,6 +21,7 @@ class InterviewConfig:
     min_notice_hours: int
     timezone: str
     interview_booking_days: int = 21
+    default_mode: str = "onsite"
     updated_at: datetime | None = None
 
 

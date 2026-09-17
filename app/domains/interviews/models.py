@@ -44,6 +44,10 @@ class InterviewConfig(Base):
             "interview_booking_days >= 1 AND interview_booking_days <= 120",
             name="ck_interview_config_interview_booking_days",
         ),
+        CheckConstraint(
+            "default_mode IN ('video', 'onsite', 'phone')",
+            name="ck_interview_config_default_mode",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
@@ -54,6 +58,11 @@ class InterviewConfig(Base):
     # book a slot before the disqualify_overdue_interviews sweep auto-
     # disqualifies them — see Application.interview_booking_deadline.
     interview_booking_days: Mapped[int] = mapped_column(nullable=False, default=21)
+    # Global fallback Mode the interview scheduler pre-selects for a job post
+    # that has no `JobPost.default_interview_mode` override of its own.
+    default_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="onsite"
+    )
     # IANA name; the wall-clock times in InterviewAvailabilityRule are read
     # against this zone when generating concrete slot instants.
     timezone: Mapped[str] = mapped_column(

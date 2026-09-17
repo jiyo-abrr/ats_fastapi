@@ -19,6 +19,10 @@ class User:
     # screening — NULL for HR/admin accounts, which never go through that
     # consent step. Set once, never edited.
     resume_screening_consent_at: datetime | None = None
+    # When an applicant consented, at signup, to processing of their personal
+    # data under the Data Privacy Act — NULL for HR/admin accounts, same as
+    # resume_screening_consent_at above. Set once, never edited.
+    data_privacy_consent_at: datetime | None = None
     is_active: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None

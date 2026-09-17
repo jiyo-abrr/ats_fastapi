@@ -51,6 +51,7 @@ class InterviewAvailabilityRepository:
             min_notice_hours=obj.min_notice_hours,
             timezone=obj.timezone,
             interview_booking_days=obj.interview_booking_days,
+            default_mode=obj.default_mode,
             updated_at=obj.updated_at,
         )
 
@@ -71,6 +72,7 @@ class InterviewAvailabilityRepository:
         obj.min_notice_hours = config.min_notice_hours
         obj.timezone = config.timezone
         obj.interview_booking_days = config.interview_booking_days
+        obj.default_mode = config.default_mode
 
     # -- logistics presets --------------------------------------------------
 

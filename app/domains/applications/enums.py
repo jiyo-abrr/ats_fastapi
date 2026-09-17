@@ -55,3 +55,15 @@ def can_withdraw(status: str) -> bool:
         return ApplicationStatus(status) in WITHDRAWABLE_STATUSES
     except ValueError:
         return False
+
+
+# Out of the hiring pipeline entirely — excluded from AI evaluation (Compare
+# tab matrix, evaluation pack export, evaluation CSV) by default, since
+# there's no hiring decision left to inform for either one.
+EVALUATION_EXCLUDED_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    {ApplicationStatus.WITHDRAWN, ApplicationStatus.DISQUALIFIED}
+)
+
+EVALUATION_ELIGIBLE_STATUSES: list[str] = sorted(
+    s.value for s in ApplicationStatus if s not in EVALUATION_EXCLUDED_STATUSES
+)

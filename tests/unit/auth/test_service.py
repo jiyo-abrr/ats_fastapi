@@ -8,12 +8,16 @@ import pytest
 from app.core.security import create_refresh_token, hash_password
 from app.domains.auth import entities
 from app.domains.auth.exceptions import (
+    DataPrivacyConsentRequiredError,
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
     InvalidRefreshTokenError,
+    NewPasswordMatchesCurrentError,
+    PasswordTooWeakError,
     ResumeScreeningConsentRequiredError,
     ResumeTooLargeError,
     UnsupportedResumeTypeError,
+    UserNotFoundError,
 )
 from app.domains.auth.service import AuthService
 from app.domains.rbac import entities as rbac_entities
@@ -76,6 +80,7 @@ class TestSignup:
                 resume_content_type="application/pdf",
                 resume_bytes=b"data",
                 resume_screening_consent=True,
+                data_privacy_consent=True,
             )
 
     async def test_rejects_missing_resume_screening_consent(self):
@@ -94,6 +99,27 @@ class TestSignup:
                 resume_content_type="application/pdf",
                 resume_bytes=b"data",
                 resume_screening_consent=False,
+                data_privacy_consent=True,
+            )
+        users.add.assert_not_called()
+
+    async def test_rejects_missing_data_privacy_consent(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_email.return_value = None
+
+        with pytest.raises(DataPrivacyConsentRequiredError):
+            await service.signup(
+                first_name="A",
+                middle_initial=None,
+                last_name="B",
+                contact_number="1",
+                email="new@example.com",
+                password="Str0ng!Pass",
+                resume_filename="resume.pdf",
+                resume_content_type="application/pdf",
+                resume_bytes=b"data",
+                resume_screening_consent=True,
+                data_privacy_consent=False,
             )
         users.add.assert_not_called()
 
@@ -113,6 +139,7 @@ class TestSignup:
                 resume_content_type="text/plain",
                 resume_bytes=b"data",
                 resume_screening_consent=True,
+                data_privacy_consent=True,
             )
 
     async def test_rejects_oversized_resume(self):
@@ -131,6 +158,7 @@ class TestSignup:
                 resume_content_type="application/pdf",
                 resume_bytes=b"x" * (6 * 1024 * 1024),
                 resume_screening_consent=True,
+                data_privacy_consent=True,
             )
 
     @patch("app.domains.auth.service.upload_object")
@@ -155,6 +183,7 @@ class TestSignup:
             resume_content_type="application/pdf",
             resume_bytes=b"data",
             resume_screening_consent=True,
+            data_privacy_consent=True,
         )
 
         mock_upload.assert_called_once()
@@ -162,6 +191,7 @@ class TestSignup:
         assert uploaded_key.startswith(f"applicant_resume/{added['entity'].id}/")
         assert added["entity"].role == "applicant"
         assert added["entity"].resume_screening_consent_at is not None
+        assert added["entity"].data_privacy_consent_at is not None
         uow.commit.assert_called_once()
         assert result.access_token
         assert result.refresh_token
@@ -286,4 +316,70 @@ class TestLogout:
         await service.logout(token)
 
         revoked_tokens.add.assert_called_once()
+        uow.commit.assert_called_once()
+
+
+class TestChangePassword:
+    async def test_rejects_unknown_user(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_id.return_value = None
+
+        with pytest.raises(UserNotFoundError):
+            await service.change_password(
+                uuid.uuid4(),
+                current_password="correct-password",
+                new_password="N3w!Passw0rd",
+            )
+
+    async def test_rejects_wrong_current_password(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_id.return_value = make_user()
+
+        with pytest.raises(InvalidCredentialsError):
+            await service.change_password(
+                uuid.uuid4(),
+                current_password="wrong-password",
+                new_password="N3w!Passw0rd",
+            )
+        users.set_password_hash.assert_not_called()
+
+    async def test_rejects_new_password_matching_current(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_id.return_value = make_user()
+
+        with pytest.raises(NewPasswordMatchesCurrentError):
+            await service.change_password(
+                uuid.uuid4(),
+                current_password="correct-password",
+                new_password="correct-password",
+            )
+        users.set_password_hash.assert_not_called()
+
+    async def test_rejects_weak_new_password(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        users.get_by_id.return_value = make_user()
+
+        with pytest.raises(PasswordTooWeakError):
+            await service.change_password(
+                uuid.uuid4(),
+                current_password="correct-password",
+                new_password="weakpassword",
+            )
+        users.set_password_hash.assert_not_called()
+
+    async def test_hashes_and_persists_the_new_password(self):
+        service, users, roles, revoked_tokens, uow = make_service()
+        user = make_user()
+        users.get_by_id.return_value = user
+
+        await service.change_password(
+            user.id,
+            current_password="correct-password",
+            new_password="N3w!Passw0rd",
+        )
+
+        users.set_password_hash.assert_called_once()
+        call_user_id, call_hash = users.set_password_hash.call_args[0]
+        assert call_user_id == user.id
+        assert call_hash != user.password_hash
         uow.commit.assert_called_once()

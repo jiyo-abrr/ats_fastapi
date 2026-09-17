@@ -34,6 +34,12 @@ class User(Base):
     resume_screening_consent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set once at applicant signup when the Data Privacy Act consent
+    # checkbox is accepted — NULL for HR/admin accounts, same as
+    # resume_screening_consent_at above.
+    data_privacy_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )

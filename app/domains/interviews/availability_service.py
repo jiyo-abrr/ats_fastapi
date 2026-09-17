@@ -68,6 +68,7 @@ class InterviewAvailabilityService:
             min_notice_hours=config.min_notice_hours,
             timezone=config.timezone,
             interview_booking_days=config.interview_booking_days,
+            default_mode=config.default_mode,
         )
 
     async def get_config(self) -> entities.InterviewConfig:
@@ -247,6 +248,7 @@ class InterviewAvailabilityService:
         config.min_notice_hours = payload.config.min_notice_hours
         config.timezone = payload.config.timezone
         config.interview_booking_days = payload.config.interview_booking_days
+        config.default_mode = payload.config.default_mode
         await self.availability.save_config(config)
         await self._replace_windows(None, payload.windows)
         await self._replace_presets(None, payload.logistics_presets)
@@ -305,7 +307,7 @@ class InterviewAvailabilityService:
         return custom + [g for g in global_ if g.mode not in custom_modes]
 
     async def get_for_job_post(self, job_post_id: uuid.UUID) -> JobPostAvailabilityOut:
-        await self._require_job_post(job_post_id)
+        job_post = await self._require_job_post(job_post_id)
         config = await self.availability.get_or_create_config()
         custom = await self.availability.windows(job_post_id)
         effective = custom if custom else await self.availability.windows(None)
@@ -317,6 +319,7 @@ class InterviewAvailabilityService:
             interviewers=await self._interviewers(job_post_id),
             config=self._config_out(config),
             uses_custom_logistics=bool(custom_presets),
+            default_mode=job_post.default_interview_mode or config.default_mode,
             logistics_presets=await self._presets_out(
                 self._resolve_presets(custom_presets, global_presets)
             ),

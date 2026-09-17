@@ -27,6 +27,7 @@ class ApplicationRepository(
             resume_object_key=obj.resume_object_key,
             assessment_deadline=obj.assessment_deadline,
             interview_booking_deadline=obj.interview_booking_deadline,
+            hr_assessed=obj.hr_assessed,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -40,6 +41,7 @@ class ApplicationRepository(
             resume_object_key=entity.resume_object_key,
             assessment_deadline=entity.assessment_deadline,
             interview_booking_deadline=entity.interview_booking_deadline,
+            hr_assessed=entity.hr_assessed,
         )
 
     async def update_status(self, application_id: uuid.UUID, status: str) -> None:
@@ -47,6 +49,12 @@ class ApplicationRepository(
         if obj is None:
             return
         obj.status = status
+
+    async def set_hr_assessed(self, application_id: uuid.UUID, value: bool) -> None:
+        obj = await self.db.get(ApplicationModel, application_id)
+        if obj is None:
+            return
+        obj.hr_assessed = value
 
     async def compare_and_set_status(
         self, application_id: uuid.UUID, *, expected: str, new: str
@@ -198,6 +206,7 @@ class ApplicationRepository(
                 UserModel.first_name.label("applicant_first_name"),
                 UserModel.last_name.label("applicant_last_name"),
                 UserModel.email.label("applicant_email"),
+                ApplicationModel.hr_assessed,
             )
             .join(JobPostModel, JobPostModel.id == ApplicationModel.job_post_id)
             .join(UserModel, UserModel.id == ApplicationModel.applicant_id)

@@ -226,7 +226,11 @@ class ApplicationService:
         return await self.applications.get_by_id(application_id)
 
     async def update_status(
-        self, application_id: uuid.UUID, new_status: ApplicationStatus
+        self,
+        application_id: uuid.UUID,
+        new_status: ApplicationStatus,
+        *,
+        hr_assessed: bool = False,
     ) -> entities.Application:
         application = await self.applications.get_by_id(application_id)
         if application is None:
@@ -250,6 +254,24 @@ class ApplicationService:
             raise ConcurrentApplicationUpdateError(
                 "This application was updated by someone else — refresh and retry."
             )
+        # Only meaningful on prescreening -> interview (see
+        # ApplicationStatusUpdate's docstring) — HR is opting to skip AI
+        # evaluation for this application. Applied unconditionally when the
+        # caller sends it true; the frontend gates when this option is shown.
+        if hr_assessed:
+            await self.applications.set_hr_assessed(application_id, True)
+        await self.uow.commit()
+        return await self.applications.get_by_id(application_id)
+
+    async def set_hr_assessed(
+        self, application_id: uuid.UUID, *, hr_assessed: bool
+    ) -> entities.Application:
+        """Reversible, independent of any status change — e.g. undoing a
+        mistaken bypass, or marking one after the fact."""
+        application = await self.applications.get_by_id(application_id)
+        if application is None:
+            raise ApplicationNotFoundError(f"Application '{application_id}' not found")
+        await self.applications.set_hr_assessed(application_id, hr_assessed)
         await self.uow.commit()
         return await self.applications.get_by_id(application_id)
 

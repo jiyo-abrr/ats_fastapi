@@ -14,6 +14,7 @@ from collections import defaultdict
 from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.applications.enums import EVALUATION_ELIGIBLE_STATUSES
 from app.domains.applications.models import Application
 from app.domains.auth.models import User
 from app.domains.evaluations import entities
@@ -194,7 +195,10 @@ class EvaluationRepository:
 
     async def application_rows_for_job_post(self, job_post_id: uuid.UUID) -> list[Row]:
         """`(id, first_name, last_name, email, status)` per applicant, for the
-        flat evaluations CSV export."""
+        flat evaluations CSV export. Excludes withdrawn/disqualified
+        applicants (see EVALUATION_ELIGIBLE_STATUSES) and applications HR
+        has marked "assessed by HR" (bypassed AI evaluation) — same
+        eligibility rule as the evaluation pack export."""
         result = await self.db.execute(
             select(
                 Application.id,
@@ -204,7 +208,11 @@ class EvaluationRepository:
                 Application.status,
             )
             .join(User, User.id == Application.applicant_id)
-            .where(Application.job_post_id == job_post_id)
+            .where(
+                Application.job_post_id == job_post_id,
+                Application.status.in_(EVALUATION_ELIGIBLE_STATUSES),
+                Application.hr_assessed.is_(False),
+            )
             .order_by(User.first_name, User.last_name)
         )
         return list(result.all())

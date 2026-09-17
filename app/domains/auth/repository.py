@@ -26,6 +26,7 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             role=obj.role.name,
             resume_object_key=obj.resume_object_key,
             resume_screening_consent_at=obj.resume_screening_consent_at,
+            data_privacy_consent_at=obj.data_privacy_consent_at,
             is_active=obj.is_active,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
@@ -43,6 +44,7 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
             role_id=entity.role_id,
             resume_object_key=entity.resume_object_key,
             resume_screening_consent_at=entity.resume_screening_consent_at,
+            data_privacy_consent_at=entity.data_privacy_consent_at,
         )
 
     # Overridden: _to_entity accesses obj.role.name — under AsyncSession that
@@ -78,6 +80,12 @@ class UserRepository(BaseRepository[UserModel, entities.User, uuid.UUID]):
         if obj is None:
             return
         obj.is_active = is_active
+
+    async def set_password_hash(self, id: uuid.UUID, password_hash: str) -> None:
+        obj = await self.db.get(UserModel, id)
+        if obj is None:
+            return
+        obj.password_hash = password_hash
 
     async def get_by_email(self, email: str) -> entities.User | None:
         result = await self.db.execute(

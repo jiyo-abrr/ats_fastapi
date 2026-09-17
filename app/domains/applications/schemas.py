@@ -35,6 +35,17 @@ class ApplicationCreate(BaseModel):
 
 class ApplicationStatusUpdate(BaseModel):
     status: ApplicationStatus
+    # Only meaningful on a prescreening -> interview move without an AI
+    # evaluation on file — HR explicitly opts to skip AI evaluation for this
+    # application instead. Ignored (has no effect) on any other transition.
+    hr_assessed: bool = False
+
+
+class HrAssessedUpdate(BaseModel):
+    """PATCH /applications/{id}/hr-assessed — reversible, independent of any
+    status change (e.g. undoing a mistaken bypass)."""
+
+    hr_assessed: bool
 
 
 class ExtendAssessmentDeadlineRequest(BaseModel):
@@ -60,6 +71,7 @@ class ApplicationOut(_StatusCapabilitiesMixin):
     resume_object_key: str
     assessment_deadline: datetime | None
     interview_booking_deadline: datetime | None
+    hr_assessed: bool
     created_at: datetime
     updated_at: datetime
 
@@ -78,6 +90,7 @@ class ApplicationReviewOut(_StatusCapabilitiesMixin):
     applicant_first_name: str
     applicant_last_name: str
     applicant_email: str
+    hr_assessed: bool = False
 
 
 class ApplicantSummaryOut(BaseModel):

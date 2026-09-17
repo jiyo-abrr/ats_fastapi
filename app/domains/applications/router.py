@@ -23,6 +23,7 @@ from app.domains.applications.schemas import (
     AttemptSummaryOut,
     EvaluationSummaryOut,
     ExtendAssessmentDeadlineRequest,
+    HrAssessedUpdate,
     JobAssessmentReviewRowOut,
 )
 from app.domains.applications.service import ApplicationService
@@ -259,7 +260,9 @@ async def update_application_status(
     service: ApplicationService = Depends(get_application_service),
     interviews: InterviewService = Depends(get_interview_service),
 ) -> ApplicationOut:
-    result = await service.update_status(application_id, payload.status)
+    result = await service.update_status(
+        application_id, payload.status, hr_assessed=payload.hr_assessed
+    )
     if payload.status == ApplicationStatus.INTERVIEW:
         # Auto-provision a self-scheduled interview so the candidate has times
         # to pick from the moment they land in this stage — no separate "open
@@ -276,6 +279,24 @@ async def update_application_status(
         )
         result = await service.get(application_id, current_user)
     return result
+
+
+@router.patch(
+    "/{application_id}/hr-assessed",
+    response_model=ApplicationOut,
+    dependencies=[_manage_applications],
+)
+async def update_hr_assessed(
+    application_id: uuid.UUID,
+    payload: HrAssessedUpdate,
+    service: ApplicationService = Depends(get_application_service),
+) -> ApplicationOut:
+    """Reversible, independent of any status change — mark or un-mark an
+    application as assessed by HR (AI evaluation skipped) at any time, not
+    just at the moment of a prescreening -> interview move."""
+    return await service.set_hr_assessed(
+        application_id, hr_assessed=payload.hr_assessed
+    )
 
 
 @router.patch(

@@ -3,6 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.domains.applications.enums import allowed_transitions_for
 from app.domains.evaluations.dimensions import (
     ASSESSMENT_DIMENSIONS,
     RESUME_DIMENSIONS,
@@ -135,13 +136,28 @@ class ApplicationEvaluationOut(BaseModel):
 
 class JobEvaluationRowOut(BaseModel):
     """One applicant's latest AI evaluation, for the Compare tab's
-    side-by-side evaluation matrix."""
+    side-by-side evaluation matrix. Also carries pipeline status +
+    allowed_status_transitions (same fields applications/schemas.py's
+    _StatusCapabilitiesMixin computes) so the Compare tab's header row can
+    offer a "move to next stage" action without a second round trip."""
 
     application_id: uuid.UUID
     applicant_first_name: str
     applicant_last_name: str
     applicant_email: str
+    status: str
+    allowed_status_transitions: list[str] = Field(default_factory=list)
+    # HR explicitly bypassed AI evaluation for this application (see
+    # Application.hr_assessed) — still listed here (unlike the export pack/
+    # CSV, which exclude it), so the frontend can show a note in place of
+    # the (nonexistent) evaluation instead of just omitting the applicant.
+    hr_assessed: bool = False
     evaluation: ApplicationEvaluationOut | None = None
+
+    @model_validator(mode="after")
+    def _fill_allowed_transitions(self):
+        self.allowed_status_transitions = allowed_transitions_for(self.status)
+        return self
 
 
 class EvaluationExportJobOut(BaseModel):

@@ -43,6 +43,10 @@ class ResumeScreeningConsentRequiredError(ValidationError):
     """Signup didn't check the "use my résumé for screening" box."""
 
 
+class DataPrivacyConsentRequiredError(ValidationError):
+    """Signup didn't check the Data Privacy Act consent box."""
+
+
 class ResumeTooLargeError(ValidationError):
     pass
 
@@ -57,3 +61,7 @@ class PasswordTooLongError(ValidationError):
 
 class PasswordTooWeakError(ValidationError):
     """Password doesn't meet the minimum complexity requirement."""
+
+
+class NewPasswordMatchesCurrentError(ValidationError):
+    """Change-password's "new" password is identical to the current one."""

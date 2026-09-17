@@ -30,6 +30,9 @@ class JobPost:
     assessment_window_days: int = 4
     # NULL = use InterviewConfig.interview_booking_days (the global default).
     interview_booking_days: int | None = None
+    # NULL = use InterviewConfig.default_mode (the global default) when
+    # scheduling this job post's interviews.
+    default_interview_mode: str | None = None
     tags: list[Tag] = field(default_factory=list)
     excluded_job_post_ids: list[uuid.UUID] = field(default_factory=list)
     # At most one of each — enforced by a UniqueConstraint(job_post_id) on
@@ -37,5 +40,8 @@ class JobPost:
     pre_assessment_template_id: uuid.UUID | None = None
     culture_fit_template_id: uuid.UUID | None = None
     technical_assessment_template_id: uuid.UUID | None = None
+    published_at: datetime | None = None
+    closed_at: datetime | None = None
+    expires_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

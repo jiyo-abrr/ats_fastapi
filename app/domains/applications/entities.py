@@ -12,6 +12,7 @@ class Application:
     resume_object_key: str
     assessment_deadline: datetime | None = None
     interview_booking_deadline: datetime | None = None
+    hr_assessed: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

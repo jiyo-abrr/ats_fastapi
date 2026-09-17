@@ -71,11 +71,15 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             position_title=obj.position.title,
             assessment_window_days=obj.assessment_window_days,
             interview_booking_days=obj.interview_booking_days,
+            default_interview_mode=obj.default_interview_mode,
             tags=[Tag(id=t.id, name=t.name, description=t.description) for t in tags],
             excluded_job_post_ids=excluded_ids,
             pre_assessment_template_id=pre_id,
             culture_fit_template_id=cf_id,
             technical_assessment_template_id=tech_id,
+            published_at=obj.published_at,
+            closed_at=obj.closed_at,
+            expires_at=obj.expires_at,
             created_at=obj.created_at,
             updated_at=obj.updated_at,
         )
@@ -204,6 +208,10 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
             position_id=entity.position_id,
             assessment_window_days=entity.assessment_window_days,
             interview_booking_days=entity.interview_booking_days,
+            default_interview_mode=entity.default_interview_mode,
+            published_at=entity.published_at,
+            closed_at=entity.closed_at,
+            expires_at=entity.expires_at,
         )
 
     # Overridden: _to_entity accesses obj.company_address.label / obj.position.title
@@ -247,6 +255,10 @@ class JobPostRepository(BaseRepository[JobPostModel, entities.JobPost, uuid.UUID
         obj.position_id = entity.position_id
         obj.assessment_window_days = entity.assessment_window_days
         obj.interview_booking_days = entity.interview_booking_days
+        obj.default_interview_mode = entity.default_interview_mode
+        obj.published_at = entity.published_at
+        obj.closed_at = entity.closed_at
+        obj.expires_at = entity.expires_at
 
     async def add_tag(self, job_post_id: uuid.UUID, tag_id: uuid.UUID) -> None:
         if await self.db.get(JobPostTag, (job_post_id, tag_id)) is not None:
