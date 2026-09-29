@@ -10,14 +10,14 @@ conventions and their deliberate exceptions.
 
 - [uv](https://docs.astral.sh/uv/) (package manager)
 - Docker + Docker Compose (Postgres, MinIO, Redis, RabbitMQ; Airflow
-  separately and optionally — see "Background jobs (arq)" below)
+  separately and optionally — see "Background jobs (RabbitMQ + FastStream)" below)
 - Python 3.14 (pinned in `.python-version`; `uv` installs it)
 
 ## Setup
 
 ```bash
 cp .env.example .env            # then edit secrets
-docker compose up -d            # Postgres + MinIO + Redis
+docker compose up -d            # Postgres + MinIO + Redis + RabbitMQ
 uv sync                         # install dependencies
 uv run alembic upgrade head     # apply migrations
 uv run python -m app.scripts.create_admin   # bootstrap the first admin
@@ -41,12 +41,13 @@ on the cp1252 console codec).
 ## Tests
 
 ```bash
-uv run pytest            # unit tests — no containers required
+uv run pytest tests/unit        # unit + architecture checks; no containers required
+uv run pytest                   # unit + integration; integration auto-skips if unreachable
 uv run pytest tests/integration  # needs a real Postgres (see conftest.py) — auto-skips if unreachable
 ```
 
 The unit suite mocks repositories and never touches Postgres/MinIO/Redis. It
-does read configuration, so `.env` must exist. `tests/integration/` runs
+does read configuration; supply the required environment variables or a `.env` file. `tests/integration/` runs
 against a real, throwaway `<db>_test` database (dropped/recreated per session,
 migrated via Alembic) — for the races/constraints/N+1 checks a mocked
 repository can't cover; see
@@ -92,13 +93,12 @@ uv run ats-cli sweep purge-expired-tokens [--json]
 **Migrating to Airflow** (review D06 / see
 [docs/plans/rabbitmq-airflow-migration.md](docs/plans/rabbitmq-airflow-migration.md)
 Phase 3) — `airflow/dags/assessment_sweep_dag.py` runs the three commands
-above via `SSHOperator`, on the schedule APScheduler used to. **Not yet
-cut over**: that DAG hasn't been verified against a real Airflow install yet
-(blocked on a host Docker/disk problem while this was being built — see the
-plan doc), so `app/core/scheduler.py`/`SCHEDULER_ENABLED` stay the live
-mechanism for now, deliberately not deleted, per the plan's own staged-
-cutover guidance (run both in parallel, diff outcomes, then retire the old
-one). See [docs/decisions/D06-scheduler-ownership.md](docs/decisions/D06-scheduler-ownership.md).
+above via `SSHOperator`. The DAG and `airflow/validate_dags.py` exist, and CI
+validates DAG import/shape in a real Airflow image. Validation is separate from
+production cutover: APScheduler remains available until scheduler ownership is
+explicitly transferred. Verify the deployment's scheduler configuration before
+cutover. See [docs/decisions/D06-scheduler-ownership.md](docs/decisions/D06-scheduler-ownership.md).
+
 
 ## Background jobs (RabbitMQ + FastStream)
 
@@ -135,8 +135,8 @@ that lands too.
   ```
   UI at http://localhost:8081 (default admin/admin — override
   `_AIRFLOW_WWW_USER_USERNAME`/`_AIRFLOW_WWW_USER_PASSWORD` before this is
-  anything but a laptop). No DAGs exist yet (`airflow/dags/` is empty
-  pending Phase 3 of the plan above).
+  anything but a laptop). The assessment sweep DAG is in `airflow/dags/`;
+  configure its SSH connection before enabling scheduled execution.
 
 ## Lint / format
 
@@ -145,7 +145,9 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Both run in CI (`.github/workflows/ci.yml`) alongside the test suite.
+Both run in CI (`.github/workflows/ci.yml`) alongside the test suite, including
+`tests/unit/test_architecture.py`. See [docs/architecture.md](docs/architecture.md)
+for the enforced boundaries.
 
 ## Auth
 

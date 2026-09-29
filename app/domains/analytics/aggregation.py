@@ -25,15 +25,11 @@ def period_start(period: str, now: datetime | None = None) -> datetime | None:
     "yearly" (no lower bound; grouped by calendar year across all time)."""
     now = now or datetime.now(timezone.utc)
     if period == "daily":
-        return now.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
+        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if period == "weekly":
         return now - timedelta(weeks=12)
     if period == "monthly":
-        return now.replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
-        )
+        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     return None
 
 

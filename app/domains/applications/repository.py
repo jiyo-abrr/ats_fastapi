@@ -18,6 +18,13 @@ class ApplicationRepository(
 ):
     model = ApplicationModel
 
+    async def get_by_id(self, id: uuid.UUID) -> entities.Application | None:
+        # A staged status/HR/deadline update can expire server-generated
+        # updated_at. Reload inside the awaited query before mapping, rather
+        # than triggering implicit async IO through an attribute access.
+        obj = await self.db.get(self.model, id, populate_existing=True)
+        return await self._to_entity(obj) if obj is not None else None
+
     async def _to_entity(self, obj: ApplicationModel) -> entities.Application:
         return entities.Application(
             id=obj.id,

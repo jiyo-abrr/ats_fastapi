@@ -22,6 +22,7 @@ from app.core.security import (
 from app.core.storage import ObjectNotFoundError, get_object, upload_object
 from app.core.unit_of_work import UnitOfWork
 from app.domains.auth import entities
+from app.domains.auth.contracts import AccessToken, SignupResult, TokenPair
 from app.domains.auth.exceptions import (
     AccountDeactivatedError,
     DataPrivacyConsentRequiredError,
@@ -39,12 +40,6 @@ from app.domains.auth.exceptions import (
     UserNotFoundError,
 )
 from app.domains.auth.repository import RevokedRefreshTokenRepository, UserRepository
-from app.domains.auth.schemas import (
-    AccessTokenResponse,
-    SignupResponse,
-    TokenResponse,
-    UserOut,
-)
 from app.domains.rbac.repository import RoleRepository
 
 # The unique index on users.email (see auth/models.py — index=True, unique=True).
@@ -126,7 +121,7 @@ class AuthService:
         resume_bytes: bytes,
         resume_screening_consent: bool,
         data_privacy_consent: bool,
-    ) -> SignupResponse:
+    ) -> SignupResult:
         if not resume_screening_consent:
             raise ResumeScreeningConsentRequiredError(
                 "You must agree to let us use your résumé for screening to "
@@ -134,8 +129,7 @@ class AuthService:
             )
         if not data_privacy_consent:
             raise DataPrivacyConsentRequiredError(
-                "You must agree to our Data Privacy Notice to create an "
-                "account"
+                "You must agree to our Data Privacy Notice to create an account"
             )
         self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
@@ -184,10 +178,10 @@ class AuthService:
         await self._commit_translating_email_conflict()
         user = await self.users.get_by_id(user_id)
 
-        return SignupResponse(
+        return SignupResult(
             access_token=create_access_token(user.id),
             refresh_token=create_refresh_token(user.id),
-            user=UserOut.model_validate(user),
+            user=user,
         )
 
     async def create_hr_account(
@@ -199,7 +193,7 @@ class AuthService:
         contact_number: str,
         email: str,
         password: str,
-    ) -> UserOut:
+    ) -> entities.User:
         self._validate_password(password)
         if await self.users.get_by_email(email) is not None:
             raise EmailAlreadyRegisteredError("Email is already registered")
@@ -224,13 +218,13 @@ class AuthService:
         await self._commit_translating_email_conflict()
         user = await self.users.get_by_id(user_id)
 
-        return UserOut.model_validate(user)
+        return user
 
-    async def get_user(self, user_id: uuid.UUID) -> UserOut:
+    async def get_user(self, user_id: uuid.UUID) -> entities.User:
         user = await self.users.get_by_id(user_id)
         if user is None:
             raise UserNotFoundError(f"User '{user_id}' not found")
-        return UserOut.model_validate(user)
+        return user
 
     async def get_own_resume(
         self, current_user: entities.User
@@ -260,7 +254,7 @@ class AuthService:
         last_name: str,
         contact_number: str,
         email: str,
-    ) -> UserOut:
+    ) -> entities.User:
         user = await self.users.get_by_id(user_id)
         if user is None:
             raise UserNotFoundError(f"User '{user_id}' not found")
@@ -275,7 +269,7 @@ class AuthService:
         user.email = email
         await self.users.update(user)
         await self._commit_translating_email_conflict()
-        return UserOut.model_validate(await self.users.get_by_id(user_id))
+        return await self.users.get_by_id(user_id)
 
     async def change_password(
         self,
@@ -305,7 +299,7 @@ class AuthService:
 
     async def set_applicant_active(
         self, user_id: uuid.UUID, *, is_active: bool
-    ) -> UserOut:
+    ) -> entities.User:
         user = await self.users.get_by_id(user_id)
         if user is None:
             raise UserNotFoundError(f"User '{user_id}' not found")
@@ -316,9 +310,9 @@ class AuthService:
 
         await self.users.set_active(user_id, is_active)
         await self.uow.commit()
-        return UserOut.model_validate(await self.users.get_by_id(user_id))
+        return await self.users.get_by_id(user_id)
 
-    async def login(self, email: str, password: str) -> TokenResponse:
+    async def login(self, email: str, password: str) -> TokenPair:
         user = await self.users.get_by_email(email)
         if user is None or not await self._verify_password(
             password, user.password_hash
@@ -327,12 +321,12 @@ class AuthService:
         if not user.is_active:
             raise AccountDeactivatedError("This account has been deactivated")
 
-        return TokenResponse(
+        return TokenPair(
             access_token=create_access_token(user.id),
             refresh_token=create_refresh_token(user.id),
         )
 
-    async def refresh(self, refresh_token: str) -> AccessTokenResponse:
+    async def refresh(self, refresh_token: str) -> AccessToken:
         token = self._decode_refresh_token(refresh_token)
 
         if await self.revoked_tokens.is_revoked(token.jti):
@@ -342,7 +336,7 @@ class AuthService:
         if user is None or not user.is_active:
             raise InvalidRefreshTokenError("Invalid refresh token")
 
-        return AccessTokenResponse(access_token=create_access_token(token.user_id))
+        return AccessToken(access_token=create_access_token(token.user_id))
 
     async def logout(self, refresh_token: str) -> None:
         token = self._decode_refresh_token(refresh_token)

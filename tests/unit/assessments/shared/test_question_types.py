@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.question_types import (
+from app.domains.assessments.shared.question_types import (
     InvalidAnswerValueError,
     InvalidQuestionConfigError,
     QuestionType,

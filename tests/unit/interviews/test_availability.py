@@ -10,9 +10,8 @@ from app.domains.interviews.schemas import (
     GlobalAvailabilityIn,
     InterviewConfigIn,
     LogisticsPresetIn,
-    _hhmm_to_minutes,
-    _minutes_to_hhmm,
 )
+from app.domains.interviews.time_utils import hhmm_to_minutes, minutes_to_hhmm
 
 
 def _config(**over):
@@ -28,19 +27,19 @@ def _config(**over):
     [("00:00", 0), ("09:30", 570), ("17:00", 1020), ("24:00", 1440)],
 )
 def test_hhmm_roundtrip(text, minutes):
-    assert _hhmm_to_minutes(text) == minutes
+    assert hhmm_to_minutes(text) == minutes
     if minutes < 1440:
-        assert _minutes_to_hhmm(minutes) == text
+        assert minutes_to_hhmm(minutes) == text
 
 
 @pytest.mark.parametrize("bad", ["9", "25:00", "09:60", "abc", "", "24:01", "24:59"])
 def test_hhmm_rejects_garbage(bad):
     with pytest.raises(ValueError):
-        _hhmm_to_minutes(bad)
+        hhmm_to_minutes(bad)
 
 
 def test_hhmm_accepts_end_of_day_sentinel():
-    assert _hhmm_to_minutes("24:00") == 1440
+    assert hhmm_to_minutes("24:00") == 1440
 
 
 def test_window_validates_times():

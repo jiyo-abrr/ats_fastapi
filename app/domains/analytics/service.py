@@ -1,15 +1,13 @@
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.domains.analytics import geocoding
+from app.domains.analytics.geocoding import GeocodingService
 from app.domains.analytics.repository import AnalyticsRepository
 
 
 class AnalyticsService:
-    def __init__(self, analytics: AnalyticsRepository, db: AsyncSession):
+    def __init__(self, analytics: AnalyticsRepository, geocoding: GeocodingService):
         self.analytics = analytics
-        self.db = db
+        self.geocoding = geocoding
 
     async def overview(
         self,
@@ -26,7 +24,7 @@ class AnalyticsService:
         Nominatim, rate-limited to 1/sec (see geocoding.py), which would
         otherwise stall the whole dashboard on a cold cache."""
         counts = await self.analytics.location_counts(position_id=position_id)
-        coords = await geocoding.geocode_many(self.db, [c["key"] for c in counts])
+        coords = await self.geocoding.geocode_many([c["key"] for c in counts])
         return [
             {
                 **c,

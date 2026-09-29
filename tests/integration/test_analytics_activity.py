@@ -52,7 +52,7 @@ async def test_weekly_granularity_is_zero_filled(db_session):
 
 
 async def test_yearly_granularity_stays_sparse(db_session):
-    """"yearly" has no lower bound to enumerate years from, so it keeps the
+    """ "yearly" has no lower bound to enumerate years from, so it keeps the
     old sparse behavior: only years that actually had an application."""
     jp = await make_job_post(db_session)
     applicant = await make_user(db_session, role="applicant")

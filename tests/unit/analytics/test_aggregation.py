@@ -18,9 +18,7 @@ class TestPeriodStart:
         assert period_start("yearly", _NOW) is None
 
     def test_daily_is_start_of_current_month(self):
-        assert period_start("daily", _NOW) == datetime(
-            2026, 9, 1, tzinfo=timezone.utc
-        )
+        assert period_start("daily", _NOW) == datetime(2026, 9, 1, tzinfo=timezone.utc)
 
     def test_weekly_is_12_weeks_back(self):
         assert period_start("weekly", _NOW) == _NOW - timedelta(weeks=12)

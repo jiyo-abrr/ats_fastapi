@@ -4,7 +4,6 @@ from unittest.mock import ANY, AsyncMock
 
 import pytest
 
-from app.core.question_types import InvalidAnswerValueError, QuestionType
 from app.domains.applications import entities as application_entities
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.assessments.attempts import entities
@@ -19,6 +18,10 @@ from app.domains.assessments.attempts.exceptions import (
     ParentApplicationNotAcceptingAssessmentsError,
 )
 from app.domains.assessments.attempts.service import AssessmentService
+from app.domains.assessments.shared.question_types import (
+    InvalidAnswerValueError,
+    QuestionType,
+)
 from app.domains.assessments.technical_assessment_templates import (
     entities as technical_template_entities,
 )

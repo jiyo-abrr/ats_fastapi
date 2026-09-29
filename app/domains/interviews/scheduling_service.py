@@ -16,6 +16,15 @@ from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.interviews import entities
 from app.domains.interviews.availability_service import InterviewAvailabilityService
+from app.domains.interviews.contracts import (
+    InterviewRequestIn,
+    InterviewRequestOut,
+    InterviewSlotOut,
+    InterviewStatusOut,
+    ResolvedAddressOut,
+    SelectSlotIn,
+    UpcomingInterviewOut,
+)
 from app.domains.interviews.exceptions import (
     ApplicationNotInInterviewError,
     InterviewAlreadyConfirmedError,
@@ -27,15 +36,6 @@ from app.domains.interviews.exceptions import (
     UnknownCompanyAddressError,
 )
 from app.domains.interviews.repository import InterviewRepository
-from app.domains.interviews.schemas import (
-    InterviewRequestIn,
-    InterviewRequestOut,
-    InterviewSlotOut,
-    InterviewStatusOut,
-    ResolvedAddressOut,
-    SelectSlotIn,
-    UpcomingInterviewOut,
-)
 
 
 class InterviewService:
@@ -111,7 +111,11 @@ class InterviewService:
         return await self.availability.get_config()
 
     async def ensure_default_request(
-        self, application_id: uuid.UUID, *, created_by_user_id: uuid.UUID
+        self,
+        application_id: uuid.UUID,
+        *,
+        created_by_user_id: uuid.UUID,
+        commit: bool = True,
     ) -> InterviewRequestOut:
         """Auto-provision a self-scheduled interview the instant an
         application enters the interview stage, so the candidate has times to
@@ -134,6 +138,7 @@ class InterviewService:
                 slots=[],
             ),
             created_by_user_id=created_by_user_id,
+            commit=commit,
         )
 
     async def set_request(
@@ -142,12 +147,14 @@ class InterviewService:
         payload: InterviewRequestIn,
         *,
         created_by_user_id: uuid.UUID,
+        commit: bool = True,
     ) -> InterviewRequestOut:
         await self._require_application_in_interview(application_id)
         if payload.company_address_id is not None:
-            if await self.interviews.get_company_address(
-                payload.company_address_id
-            ) is None:
+            if (
+                await self.interviews.get_company_address(payload.company_address_id)
+                is None
+            ):
                 raise UnknownCompanyAddressError(
                     f"Company address '{payload.company_address_id}' does not exist"
                 )
@@ -214,7 +221,10 @@ class InterviewService:
                 )
             )
 
-        await self.uow.commit()
+        if commit:
+            await self.uow.commit()
+        else:
+            await self.uow.flush()
         return await self.get_for_application(application_id)  # type: ignore[return-value]
 
     async def select_slot(

@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.core.question_types import InvalidQuestionConfigError, QuestionType
+from app.domains.assessments.shared.question_types import (
+    InvalidQuestionConfigError,
+    QuestionType,
+)
 from app.domains.assessments.technical_assessment_templates import entities
 from app.domains.assessments.technical_assessment_templates.exceptions import (
     TechnicalAssessmentQuestionNotFoundError,

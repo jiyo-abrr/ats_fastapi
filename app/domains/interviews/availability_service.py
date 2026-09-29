@@ -23,16 +23,7 @@ from app.domains.interviews import entities
 from app.domains.interviews.availability_repository import (
     InterviewAvailabilityRepository,
 )
-from app.domains.interviews.exceptions import (
-    ApplicationNotInInterviewError,
-    InterviewApplicationNotFoundError,
-    InterviewJobPostNotFoundError,
-    InvalidAvailabilityWindowError,
-    UnknownCompanyAddressError,
-    UnknownInterviewerError,
-)
-from app.domains.interviews.schemas import (
-    _WEEKDAYS,
+from app.domains.interviews.contracts import (
     AvailabilityWindowIn,
     AvailabilityWindowOut,
     DateOverrideIn,
@@ -48,9 +39,16 @@ from app.domains.interviews.schemas import (
     LogisticsPresetOut,
     OpenSlotOut,
     ResolvedAddressOut,
-    _hhmm_to_minutes,
-    _minutes_to_hhmm,
 )
+from app.domains.interviews.exceptions import (
+    ApplicationNotInInterviewError,
+    InterviewApplicationNotFoundError,
+    InterviewJobPostNotFoundError,
+    InvalidAvailabilityWindowError,
+    UnknownCompanyAddressError,
+    UnknownInterviewerError,
+)
+from app.domains.interviews.time_utils import WEEKDAYS, hhmm_to_minutes, minutes_to_hhmm
 
 
 class InterviewAvailabilityService:
@@ -142,8 +140,8 @@ class InterviewAvailabilityService:
         return [
             AvailabilityWindowOut(
                 weekday=r.weekday,
-                start=_minutes_to_hhmm(r.start_minute),
-                end=_minutes_to_hhmm(r.end_minute),
+                start=minutes_to_hhmm(r.start_minute),
+                end=minutes_to_hhmm(r.end_minute),
             )
             for r in rules
         ]
@@ -159,20 +157,20 @@ class InterviewAvailabilityService:
         # (one ends exactly when the other starts) are fine.
         by_weekday: dict[int, list[tuple[int, int]]] = {}
         for window in windows:
-            start = _hhmm_to_minutes(window.start)
-            end = _hhmm_to_minutes(window.end)
+            start = hhmm_to_minutes(window.start)
+            end = hhmm_to_minutes(window.end)
             if end <= start:
                 raise InvalidAvailabilityWindowError(
-                    f"{_WEEKDAYS[window.weekday]} window end must be after its start"
+                    f"{WEEKDAYS[window.weekday]} window end must be after its start"
                 )
             by_weekday.setdefault(window.weekday, []).append((start, end))
         for weekday, spans in by_weekday.items():
             for (s1, e1), (s2, e2) in itertools.combinations(sorted(spans), 2):
                 if s2 < e1:
                     raise InvalidAvailabilityWindowError(
-                        f"{_WEEKDAYS[weekday]} has overlapping windows "
-                        f"({_minutes_to_hhmm(s1)}-{_minutes_to_hhmm(e1)} and "
-                        f"{_minutes_to_hhmm(s2)}-{_minutes_to_hhmm(e2)})"
+                        f"{WEEKDAYS[weekday]} has overlapping windows "
+                        f"({minutes_to_hhmm(s1)}-{minutes_to_hhmm(e1)} and "
+                        f"{minutes_to_hhmm(s2)}-{minutes_to_hhmm(e2)})"
                     )
 
         entities_list = [
@@ -180,8 +178,8 @@ class InterviewAvailabilityService:
                 id=uuid.uuid4(),
                 job_post_id=job_post_id,
                 weekday=window.weekday,
-                start_minute=_hhmm_to_minutes(window.start),
-                end_minute=_hhmm_to_minutes(window.end),
+                start_minute=hhmm_to_minutes(window.start),
+                end_minute=hhmm_to_minutes(window.end),
             )
             for window in windows
         ]
@@ -200,9 +198,9 @@ class InterviewAvailabilityService:
                 end_date=o.end_date,
                 is_unavailable=o.is_unavailable,
                 start=(
-                    None if o.start_minute is None else _minutes_to_hhmm(o.start_minute)
+                    None if o.start_minute is None else minutes_to_hhmm(o.start_minute)
                 ),
-                end=(None if o.end_minute is None else _minutes_to_hhmm(o.end_minute)),
+                end=(None if o.end_minute is None else minutes_to_hhmm(o.end_minute)),
                 note=o.note,
             )
             for o in rows
@@ -220,8 +218,8 @@ class InterviewAvailabilityService:
                 start_date=ov.start_date,
                 end_date=ov.end_date,
                 is_unavailable=ov.is_unavailable,
-                start_minute=(None if ov.start is None else _hhmm_to_minutes(ov.start)),
-                end_minute=(None if ov.end is None else _hhmm_to_minutes(ov.end)),
+                start_minute=(None if ov.start is None else hhmm_to_minutes(ov.start)),
+                end_minute=(None if ov.end is None else hhmm_to_minutes(ov.end)),
                 note=ov.note,
             )
             for ov in overrides
@@ -371,7 +369,7 @@ class InterviewAvailabilityService:
         step = duration or config.slot_minutes
         try:
             tz = ZoneInfo(config.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
+        except ZoneInfoNotFoundError, ValueError:
             tz = UTC
 
         rules = await self._resolved_windows(application.job_post_id)

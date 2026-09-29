@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.core.question_types import QuestionType
+from app.domains.assessments.shared.question_types import QuestionType
 
 
 class PreAssessmentTemplate(Base):
@@ -51,8 +51,8 @@ class PreAssessmentQuestion(Base):
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
     prompt: Mapped[str] = mapped_column(String(2000), nullable=False)
     question_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # Shape depends on question_type — see app.core.question_types. Always
-    # read/written as a whole unit, never filtered into individually, so
+    # Shape depends on question_type — see assessments/shared/question_types.py.
+    # Always read/written as a whole unit, never filtered into individually, so
     # JSONB fits even in this normalized schema.
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Per-question timer (layer 3) — null means untimed.

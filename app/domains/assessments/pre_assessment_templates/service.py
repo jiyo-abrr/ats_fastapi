@@ -1,4 +1,3 @@
-from app.core.template_service import BaseTemplateService
 from app.core.unit_of_work import UnitOfWork
 from app.domains.assessments.pre_assessment_templates import entities
 from app.domains.assessments.pre_assessment_templates.exceptions import (
@@ -10,6 +9,7 @@ from app.domains.assessments.pre_assessment_templates.exceptions import (
 from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
+from app.domains.assessments.shared.template_service import BaseTemplateService
 
 
 class PreAssessmentTemplateService(

@@ -14,6 +14,10 @@ import uuid
 from app.core.csv_safe import csv_safe
 from app.core.unit_of_work import UnitOfWork
 from app.domains.evaluations import entities
+from app.domains.evaluations.contracts import (
+    EvaluationImportIn,
+    EvaluationImportResultOut,
+)
 from app.domains.evaluations.dimensions import (
     ASSESSMENT_DIMENSIONS,
     RESUME_DIMENSIONS,
@@ -23,11 +27,6 @@ from app.domains.evaluations.exceptions import (
     EvaluationNotFoundError,
 )
 from app.domains.evaluations.repository import EvaluationRepository
-from app.domains.evaluations.schemas import (
-    ApplicationEvaluationOut,
-    EvaluationImportIn,
-    EvaluationImportResultOut,
-)
 
 
 class EvaluationService:
@@ -99,22 +98,19 @@ class EvaluationService:
 
     async def get_for_application(
         self, application_id: uuid.UUID
-    ) -> ApplicationEvaluationOut:
+    ) -> entities.ApplicationEvaluation:
         evaluation = await self.evaluations.get_latest(application_id)
         if evaluation is None:
             raise EvaluationNotFoundError(
                 f"No evaluation imported for application '{application_id}'"
             )
-        return ApplicationEvaluationOut.model_validate(evaluation)
+        return evaluation
 
     async def latest_full_for_applications(
         self, application_ids: list[uuid.UUID]
-    ) -> dict[uuid.UUID, ApplicationEvaluationOut]:
+    ) -> dict[uuid.UUID, entities.ApplicationEvaluation]:
         full = await self.evaluations.latest_full_for_applications(application_ids)
-        return {
-            app_id: ApplicationEvaluationOut.model_validate(evaluation)
-            for app_id, evaluation in full.items()
-        }
+        return full
 
     async def latest_summaries_for_applications(
         self, application_ids: list[uuid.UUID]

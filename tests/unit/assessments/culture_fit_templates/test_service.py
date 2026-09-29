@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.core.question_types import InvalidQuestionConfigError, QuestionType
 from app.domains.assessments.culture_fit_templates import entities
 from app.domains.assessments.culture_fit_templates.exceptions import (
     CultureFitQuestionNotFoundError,
@@ -14,6 +13,10 @@ from app.domains.assessments.culture_fit_templates.exceptions import (
 )
 from app.domains.assessments.culture_fit_templates.service import (
     CultureFitTemplateService,
+)
+from app.domains.assessments.shared.question_types import (
+    InvalidQuestionConfigError,
+    QuestionType,
 )
 
 

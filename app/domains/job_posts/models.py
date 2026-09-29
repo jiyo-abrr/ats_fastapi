@@ -90,9 +90,7 @@ class JobPost(Base):
     # for this job post's applications — NULL means "use the global default".
     # Copied onto Application.interview_booking_deadline when an application
     # moves prescreening -> interview (see the applications router).
-    interview_booking_days: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
+    interview_booking_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Overrides InterviewConfig.default_mode (the global default) for the
     # Mode the interview scheduler pre-selects for this job post's
     # interviews — NULL means "use the global default".

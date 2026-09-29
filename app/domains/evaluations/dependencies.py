@@ -7,6 +7,7 @@ from app.domains.evaluations.export_jobs import (
     EvaluationExportJobRepository,
     ExportJobService,
 )
+from app.domains.evaluations.export_repository import EvaluationExportRepository
 from app.domains.evaluations.repository import EvaluationRepository
 from app.domains.evaluations.service import EvaluationService
 
@@ -35,3 +36,9 @@ def get_export_job_service(
     uow: UnitOfWork = Depends(get_unit_of_work),
 ) -> ExportJobService:
     return ExportJobService(jobs, uow)
+
+
+def get_evaluation_export_repository(
+    db: AsyncSession = Depends(get_db),
+) -> EvaluationExportRepository:
+    return EvaluationExportRepository(db)

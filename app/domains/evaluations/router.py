@@ -19,10 +19,7 @@ from app.domains.applications.enums import (
     ApplicationStatus,
 )
 from app.domains.applications.exceptions import ResumeUnavailableError
-from app.domains.applications.models import Application as ApplicationModel
 from app.domains.applications.service import ApplicationService
-from app.domains.assessments.attempts.dependencies import get_assessment_service
-from app.domains.assessments.attempts.service import AssessmentService
 from app.domains.auth import entities as auth_entities
 from app.domains.auth.dependencies import get_current_user
 from app.domains.evaluations.dependencies import (
@@ -31,10 +28,10 @@ from app.domains.evaluations.dependencies import (
 )
 from app.domains.evaluations.exceptions import EvaluationExportJobNotFoundError
 from app.domains.evaluations.export_jobs import ExportJobService
+from app.domains.evaluations.export_repository import ExportApplicant
 from app.domains.evaluations.pack import (
     EVALUATION_PACK_MAX,
     EVALUATION_PACK_MAX_BYTES,
-    build_evaluation_pack,
 )
 from app.domains.evaluations.schemas import (
     ApplicationEvaluationOut,
@@ -47,6 +44,12 @@ from app.domains.evaluations.service import EvaluationService
 from app.domains.job_posts.dependencies import get_job_post_service
 from app.domains.job_posts.service import JobPostService
 from app.domains.rbac.dependencies import require_permission
+from app.use_cases.dependencies import get_prepare_evaluation_export
+from app.use_cases.prepare_evaluation_export import (
+    ExportLimitExceeded,
+    ExportPolicy,
+    PrepareEvaluationExport,
+)
 
 _manage_applications = Depends(require_permission("manage_applications"))
 
@@ -68,78 +71,39 @@ async def export_evaluation_pack(
         None, description="Restrict the pack to these pipeline statuses"
     ),
     current_user: auth_entities.User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
     service: ApplicationService = Depends(get_application_service),
-    assessment_service: AssessmentService = Depends(get_assessment_service),
-    job_post_service: JobPostService = Depends(get_job_post_service),
+    prepare: PrepareEvaluationExport = Depends(get_prepare_evaluation_export),
 ) -> Response:
-    """ZIP for external AI evaluation: job spec + rubric + every applicant's
-    résumé and assessment answers. Bounded by applicant count and total bytes —
-    over either cap, use `POST /applications/export/async` instead, or narrow
-    with `?status=`.
-
-    Defaults to every status except withdrawn/disqualified — those are out
-    of the pipeline, so there's nothing left to evaluate them for. Pass an
-    explicit `?status=` (including withdrawn/disqualified) to override.
-    Always excludes applications HR has marked "assessed by HR" (bypassed
-    AI evaluation) — there's no ?override for that one, since it's an
-    explicit HR decision, not a pipeline stage."""
-    job = await job_post_service.get(job_post_id)
-    query = (
-        await service.list_for_review(
-            job_post_id=job_post_id,
-            statuses=(
-                [s.value for s in status] if status else EVALUATION_ELIGIBLE_STATUSES
-            ),
-        )
-    ).where(ApplicationModel.hr_assessed.is_(False))
-    # Fetch one past the cap so an over-limit job post is a cheap 413, not a
-    # full table scan.
-    rows = (await db.execute(query.limit(EVALUATION_PACK_MAX + 1))).all()
-
-    if len(rows) > EVALUATION_PACK_MAX:
-        raise HTTPException(
-            status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=(
-                f"More than {EVALUATION_PACK_MAX} applicants match. Use "
-                "POST /applications/export/async for a job post this size, or "
-                "narrow with ?status=applied (repeatable)."
-            ),
-        )
-
-    applicants: list[dict] = []
-    total_bytes = 0
-    for row in rows:
+    async def load_resume(row: ExportApplicant) -> tuple[bytes, str] | None:
         try:
             data, _content_type, filename = await service.get_resume(
                 row.id, current_user
             )
-            total_bytes += len(data)
-            if total_bytes > EVALUATION_PACK_MAX_BYTES:
-                raise HTTPException(
-                    status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=(
-                        "The résumés for this set exceed the "
-                        f"{EVALUATION_PACK_MAX_BYTES // (1024 * 1024)} MiB export "
-                        "limit. Use POST /applications/export/async instead, or "
-                        "narrow with ?status=."
-                    ),
-                )
-            resume = (data, filename)
+            return data, filename
         except ResumeUnavailableError:
-            resume = None
-        reviews = await assessment_service.list_review_for_application(row.id)
-        applicants.append({"row": row, "resume": resume, "reviews": reviews})
+            return None
 
-    payload = build_evaluation_pack(job=job, applicants=applicants)
-    slug = re.sub(r"[^a-z0-9]+", "-", job.job_title.lower()).strip("-") or "job"
+    try:
+        result = await prepare.execute(
+            job_post_id,
+            statuses=[s.value for s in status] if status else None,
+            policy=ExportPolicy(EVALUATION_PACK_MAX, EVALUATION_PACK_MAX_BYTES),
+            load_resume=load_resume,
+        )
+    except ExportLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status_codes.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"{exc} Use POST /applications/export/async instead, "
+                "or narrow with ?status=."
+            ),
+        ) from exc
+    slug = re.sub(r"[^a-z0-9]+", "-", result.job_title.lower()).strip("-") or "job"
     return Response(
-        content=payload,
+        content=result.payload,
         media_type="application/zip",
         headers={
-            "Content-Disposition": (
-                f'attachment; filename="{slug}-evaluation-pack.zip"'
-            )
+            "Content-Disposition": f'attachment; filename="{slug}-evaluation-pack.zip"'
         },
     )
 

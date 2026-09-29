@@ -1,9 +1,14 @@
-# Maintainability review — what's left
+# Maintainability review — historical batch 18 snapshot
 
 Companion to [maintainability-review.md](maintainability-review.md) and
 [maintainability-review-progress.md](maintainability-review-progress.md).
 
-**Everything tracked in the review is done.** F01–F29 are all ✅ (F12 and F19
+This file records the earlier F01–F29 review. Its completion claims and test
+counts apply to batch 18, not every later working tree. Current conventions
+are in [architecture.md](architecture.md); the 2026-09-17 follow-up is tracked
+in [repository-structure-review.md](repository-structure-review.md).
+
+**Everything tracked in that review was reported done at batch 18.** F01–F29 are all ✅ (F12 and F19
 kept a small, deliberately-scoped remainder noted below; nothing else has an
 open remainder). All 9 product decisions (D01–D09) are recorded, and the
 ones with code implications are implemented. See
@@ -12,8 +17,7 @@ ones with code implications are implemented. See
 
 **F07 — done ✅ (batch 17–18), the last item.** Both `interviews/` and
 `evaluations/` now follow the standard entities/repository pattern — see
-CLAUDE.md's domain notes and `docs/architecture.md`, whose "Known gaps"
-section is now empty. `docs/architecture.md` is the short reference for the
+the domain notes and `docs/architecture.md`. `docs/architecture.md` is the short reference for the
 write/read path rules and the deliberate exceptions (projection reads,
 `analytics/`, etc.) if you're deciding where new code in either domain
 should live.
@@ -36,7 +40,7 @@ so nobody mistakes them for oversights:
   500 body and log line); a full metrics/observability framework was
   explicitly out of scope for this review.
 
-## Current verification snapshot (batch 18)
+## Historical verification snapshot (batch 18)
 
 286 tests pass (258 unit + 28 integration), `ruff check` / `ruff format
 --check` clean, `alembic check` clean.

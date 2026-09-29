@@ -14,9 +14,7 @@ async def test_withdrawn_application_does_not_count_as_excluded(db_session):
     )
     repo = ApplicationRepository(db_session)
 
-    assert (
-        await repo.has_any_application_for(applicant.id, job_post.id) is False
-    )
+    assert await repo.has_any_application_for(applicant.id, job_post.id) is False
 
 
 async def test_non_withdrawn_application_counts_as_excluded(db_session):
@@ -27,6 +25,4 @@ async def test_non_withdrawn_application_counts_as_excluded(db_session):
     )
     repo = ApplicationRepository(db_session)
 
-    assert (
-        await repo.has_any_application_for(applicant.id, job_post.id) is True
-    )
+    assert await repo.has_any_application_for(applicant.id, job_post.id) is True

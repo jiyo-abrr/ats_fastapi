@@ -41,7 +41,8 @@ from app.domains.interviews.dependencies import get_interview_service
 from app.domains.interviews.scheduling_service import InterviewService
 from app.domains.rbac.dependencies import require_permission
 from app.use_cases.apply_to_job import ApplyToJob
-from app.use_cases.dependencies import get_apply_to_job
+from app.use_cases.dependencies import get_apply_to_job, get_transition_application
+from app.use_cases.transition_application import TransitionApplication
 
 _manage_applications = Depends(require_permission("manage_applications"))
 
@@ -257,28 +258,14 @@ async def update_application_status(
     application_id: uuid.UUID,
     payload: ApplicationStatusUpdate,
     current_user: auth_entities.User = Depends(get_current_user),
-    service: ApplicationService = Depends(get_application_service),
-    interviews: InterviewService = Depends(get_interview_service),
+    transition: TransitionApplication = Depends(get_transition_application),
 ) -> ApplicationOut:
-    result = await service.update_status(
-        application_id, payload.status, hr_assessed=payload.hr_assessed
+    return await transition.execute(
+        application_id=application_id,
+        status=payload.status,
+        hr_assessed=payload.hr_assessed,
+        current_user=current_user,
     )
-    if payload.status == ApplicationStatus.INTERVIEW:
-        # Auto-provision a self-scheduled interview so the candidate has times
-        # to pick from the moment they land in this stage — no separate "open
-        # the interview" step. No-op if HR already set one up.
-        await interviews.ensure_default_request(
-            application_id, created_by_user_id=current_user.id
-        )
-        # Starts the candidate's window to book a slot — past this,
-        # disqualify_overdue_interviews auto-disqualifies them. The job post
-        # may override the global default with its own interview_booking_days.
-        config = await interviews.get_config()
-        await service.set_interview_booking_deadline_for_transition(
-            application_id, default_days=config.interview_booking_days
-        )
-        result = await service.get(application_id, current_user)
-    return result
 
 
 @router.patch(

@@ -1,11 +1,11 @@
 from app.core.unit_of_work import UnitOfWork
+from app.domains.rbac.entities import Permission, RoleWithPermissions
 from app.domains.rbac.exceptions import PermissionNotFoundError, RoleNotFoundError
 from app.domains.rbac.repository import (
     PermissionRepository,
     RolePermissionRepository,
     RoleRepository,
 )
-from app.domains.rbac.schemas import PermissionOut, RoleOut
 
 
 class RBACService:
@@ -21,24 +21,24 @@ class RBACService:
         self.role_permissions = role_permissions
         self.uow = uow
 
-    async def list_roles(self) -> list[RoleOut]:
+    async def list_roles(self) -> list[RoleWithPermissions]:
         roles = await self.roles.list_all()
         result = []
         for role in roles:
             permissions = await self.role_permissions.list_for_role(role.id)
             result.append(
-                RoleOut(
+                RoleWithPermissions(
                     id=role.id,
                     name=role.name,
                     description=role.description,
-                    permissions=[PermissionOut.model_validate(p) for p in permissions],
+                    permissions=permissions,
                 )
             )
         return result
 
-    async def list_permissions(self) -> list[PermissionOut]:
+    async def list_permissions(self) -> list[Permission]:
         permissions = await self.permissions.list_all()
-        return [PermissionOut.model_validate(p) for p in permissions]
+        return permissions
 
     async def grant(self, role_name: str, permission_key: str) -> None:
         role, permission = await self._resolve(role_name, permission_key)

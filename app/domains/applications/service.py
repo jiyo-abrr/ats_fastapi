@@ -231,6 +231,7 @@ class ApplicationService:
         new_status: ApplicationStatus,
         *,
         hr_assessed: bool = False,
+        commit: bool = True,
     ) -> entities.Application:
         application = await self.applications.get_by_id(application_id)
         if application is None:
@@ -260,7 +261,10 @@ class ApplicationService:
         # caller sends it true; the frontend gates when this option is shown.
         if hr_assessed:
             await self.applications.set_hr_assessed(application_id, True)
-        await self.uow.commit()
+        if commit:
+            await self.uow.commit()
+        else:
+            await self.uow.flush()
         return await self.applications.get_by_id(application_id)
 
     async def set_hr_assessed(
@@ -366,7 +370,7 @@ class ApplicationService:
         await self.uow.commit()
 
     async def set_interview_booking_deadline_for_transition(
-        self, application_id: uuid.UUID, *, default_days: int
+        self, application_id: uuid.UUID, *, default_days: int, commit: bool = True
     ) -> None:
         """Called once, right after an application moves prescreening ->
         interview (see the router) — starts the candidate's window to book a
@@ -388,10 +392,11 @@ class ApplicationService:
             else default_days
         )
         deadline = datetime.now(UTC) + timedelta(days=days)
-        await self.applications.set_interview_booking_deadline(
-            application_id, deadline
-        )
-        await self.uow.commit()
+        await self.applications.set_interview_booking_deadline(application_id, deadline)
+        if commit:
+            await self.uow.commit()
+        else:
+            await self.uow.flush()
 
     async def disqualify_interview_overdue(self, application_id: uuid.UUID) -> None:
         """System-only — called from the interview-stage disqualification

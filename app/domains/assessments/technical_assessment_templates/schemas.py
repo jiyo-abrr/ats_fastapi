@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.question_types import QuestionType
+from app.domains.assessments.shared.question_types import QuestionType
 
 
 class TechnicalAssessmentTemplateCreate(BaseModel):

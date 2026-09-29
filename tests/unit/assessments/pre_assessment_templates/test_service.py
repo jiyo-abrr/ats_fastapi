@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.core.question_types import InvalidQuestionConfigError, QuestionType
 from app.domains.assessments.pre_assessment_templates import entities
 from app.domains.assessments.pre_assessment_templates.exceptions import (
     PreAssessmentQuestionNotFoundError,
@@ -14,6 +13,10 @@ from app.domains.assessments.pre_assessment_templates.exceptions import (
 )
 from app.domains.assessments.pre_assessment_templates.service import (
     PreAssessmentTemplateService,
+)
+from app.domains.assessments.shared.question_types import (
+    InvalidQuestionConfigError,
+    QuestionType,
 )
 
 

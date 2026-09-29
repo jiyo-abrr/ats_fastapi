@@ -2,7 +2,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.core.question_types import validate_answer_value
 from app.core.unit_of_work import UnitOfWork
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.repository import ApplicationRepository
@@ -25,6 +24,7 @@ from app.domains.assessments.culture_fit_templates.repository import (
 from app.domains.assessments.pre_assessment_templates.repository import (
     PreAssessmentTemplateRepository,
 )
+from app.domains.assessments.shared.question_types import validate_answer_value
 from app.domains.assessments.technical_assessment_templates.repository import (
     TechnicalAssessmentTemplateRepository,
 )

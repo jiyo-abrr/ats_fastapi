@@ -35,9 +35,7 @@ class TestRecommend:
         )
 
     def test_high_avg_score_with_passed_prioritizes_high_scorers(self):
-        assert (
-            _rec(passed=1, avg_score=85.0) == "Prioritize high-scoring candidates"
-        )
+        assert _rec(passed=1, avg_score=85.0) == "Prioritize high-scoring candidates"
 
     def test_passed_without_high_score_schedules_interviews(self):
         assert _rec(passed=1, avg_score=50.0) == "Schedule interviews"
@@ -45,15 +43,11 @@ class TestRecommend:
 
     def test_low_turnout_and_fresh_posting_keeps_promoting(self):
         assert (
-            _rec(applied=2, posting_duration_days=5)
-            == "Continue promoting the posting"
+            _rec(applied=2, posting_duration_days=5) == "Continue promoting the posting"
         )
 
     def test_low_turnout_and_stale_posting_extends(self):
-        assert (
-            _rec(applied=2, posting_duration_days=30)
-            == "Extend the posting period"
-        )
+        assert _rec(applied=2, posting_duration_days=30) == "Extend the posting period"
 
     def test_low_turnout_with_unknown_duration_keeps_promoting(self):
         assert (
@@ -62,11 +56,7 @@ class TestRecommend:
         )
 
     def test_low_screen_rate_flags_requirements_review(self):
-        assert (
-            _rec(applied=10, screened=2) == "Review job requirements"
-        )
+        assert _rec(applied=10, screened=2) == "Review job requirements"
 
     def test_healthy_turnout_and_screen_rate_keeps_promoting(self):
-        assert (
-            _rec(applied=10, screened=8) == "Continue promoting the posting"
-        )
+        assert _rec(applied=10, screened=8) == "Continue promoting the posting"

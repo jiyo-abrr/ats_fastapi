@@ -12,7 +12,7 @@ as-is for the common case (<= EVALUATION_PACK_MAX applicants, small résumés);
 publishes to `EVALUATION_EXPORT_QUEUE` (`app/core/queue.py`) and returns
 immediately with a job id to poll.
 
-This module intentionally does NOT go through `AssessmentService.get_resume`'s
+This module intentionally does NOT go through `ApplicationService.get_resume`'s
 owner-or-manage_applications check: the job was already authorized once, at
 enqueue time, by the `manage_applications`-gated route. The worker fetches
 objects straight from MinIO via `resume_object_key`.
@@ -25,15 +25,12 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from faststream import AckPolicy, FastStream
-from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.queue import EVALUATION_EXPORT_DLQ, EVALUATION_EXPORT_QUEUE, broker
 from app.core.storage import ObjectNotFoundError, get_object, upload_object
 from app.core.unit_of_work import UnitOfWork
-from app.domains.applications.enums import EVALUATION_ELIGIBLE_STATUSES
-from app.domains.applications.models import Application as ApplicationModel
 from app.domains.applications.repository import ApplicationRepository
 from app.domains.assessments.attempts.repository import AssessmentAttemptRepository
 from app.domains.assessments.attempts.service import AssessmentService
@@ -47,8 +44,15 @@ from app.domains.assessments.technical_assessment_templates.repository import (
     TechnicalAssessmentTemplateRepository,
 )
 from app.domains.evaluations.export_jobs import EvaluationExportJobRepository
-from app.domains.evaluations.pack import build_evaluation_pack
+from app.domains.evaluations.export_repository import (
+    EvaluationExportRepository,
+    ExportApplicant,
+)
 from app.domains.job_posts.repository import JobPostRepository
+from app.use_cases.prepare_evaluation_export import (
+    ExportPolicy,
+    PrepareEvaluationExport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,54 +130,33 @@ async def _run_export(db, job) -> str:
         UnitOfWork(db),
     )
 
-    job_post = await job_posts.get_by_id(job.job_post_id)
-    if job_post is None:
-        raise ValueError(f"job post '{job.job_post_id}' no longer exists")
-
-    # Same default as the sync /export route: every status except
-    # withdrawn/disqualified, unless the caller explicitly filtered.
-    statuses = (
-        job.status_filter.split(",")
-        if job.status_filter
-        else EVALUATION_ELIGIBLE_STATUSES
+    prepare = PrepareEvaluationExport(
+        EvaluationExportRepository(db), job_posts, assessment_service
     )
-    # Always excludes hr_assessed applications — same rule as the sync
-    # /export route (no override for this one; it's an explicit HR
-    # decision, not a pipeline stage a ?status= filter could restore).
-    query = (
-        await applications.list_for_review(
-            job_post_id=job.job_post_id, statuses=statuses
-        )
-    ).where(ApplicationModel.hr_assessed.is_(False))
-    rows = (await db.execute(query.limit(_ASYNC_EXPORT_MAX_APPLICANTS))).all()
 
-    resume_keys: dict[uuid.UUID, str | None] = {}
-    if rows:
-        key_rows = await db.execute(
-            select(ApplicationModel.id, ApplicationModel.resume_object_key).where(
-                ApplicationModel.id.in_([r.id for r in rows])
+    async def load_resume(row: ExportApplicant) -> tuple[bytes, str] | None:
+        if not row.resume_object_key:
+            return None
+        try:
+            data, _content_type = await asyncio.to_thread(
+                get_object, settings.minio_bucket, row.resume_object_key
             )
-        )
-        resume_keys = dict(key_rows.all())
+            return data, PurePosixPath(row.resume_object_key).name or "resume"
+        except ObjectNotFoundError:
+            return None
 
-    applicants: list[dict] = []
-    for row in rows:
-        resume = None
-        object_key = resume_keys.get(row.id)
-        if object_key:
-            try:
-                data, _content_type = await asyncio.to_thread(
-                    get_object, settings.minio_bucket, object_key
-                )
-                resume = (data, PurePosixPath(object_key).name or "resume")
-            except ObjectNotFoundError:
-                resume = None
-        reviews = await assessment_service.list_review_for_application(row.id)
-        applicants.append({"row": row, "resume": resume, "reviews": reviews})
-
-    payload = build_evaluation_pack(job=job_post, applicants=applicants)
+    result = await prepare.execute(
+        job.job_post_id,
+        statuses=job.status_filter.split(",") if job.status_filter else None,
+        policy=ExportPolicy(_ASYNC_EXPORT_MAX_APPLICANTS),
+        load_resume=load_resume,
+    )
     object_key = f"{_EVALUATION_PACKS_PREFIX}{job.id}.zip"
     await asyncio.to_thread(
-        upload_object, settings.minio_bucket, object_key, payload, "application/zip"
+        upload_object,
+        settings.minio_bucket,
+        object_key,
+        result.payload,
+        "application/zip",
     )
     return object_key

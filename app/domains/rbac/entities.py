@@ -14,3 +14,8 @@ class Permission:
     id: uuid.UUID
     key: str
     description: str | None
+
+
+@dataclass
+class RoleWithPermissions(Role):
+    permissions: list[Permission]

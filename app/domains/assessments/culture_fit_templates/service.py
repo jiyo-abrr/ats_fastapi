@@ -1,4 +1,3 @@
-from app.core.template_service import BaseTemplateService
 from app.core.unit_of_work import UnitOfWork
 from app.domains.assessments.culture_fit_templates import entities
 from app.domains.assessments.culture_fit_templates.exceptions import (
@@ -10,6 +9,7 @@ from app.domains.assessments.culture_fit_templates.exceptions import (
 from app.domains.assessments.culture_fit_templates.repository import (
     CultureFitTemplateRepository,
 )
+from app.domains.assessments.shared.template_service import BaseTemplateService
 
 
 class CultureFitTemplateService(

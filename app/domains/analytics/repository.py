@@ -694,9 +694,7 @@ class AnalyticsRepository:
             "score_dimensions": list(dimensions.values()),
         }
 
-    async def location_counts(
-        self, *, position_id: uuid.UUID | None
-    ) -> list[dict]:
+    async def location_counts(self, *, position_id: uuid.UUID | None) -> list[dict]:
         """Latest evaluation's `location` per application in scope, tallied —
         for the analytics locations graph/heatmap. All-time current-state,
         same coverage semantics as the rest of _evaluations (not period-
@@ -736,9 +734,7 @@ class AnalyticsRepository:
         )
         return [{"key": row.location, "count": int(row.count)} for row in rows]
 
-    async def job_post_reports(
-        self, *, position_id: uuid.UUID | None
-    ) -> list[dict]:
+    async def job_post_reports(self, *, position_id: uuid.UUID | None) -> list[dict]:
         """One row per job post — lifetime performance for the recruitment
         report. Not period-scoped: this is "how has this posting done since
         it went live," independent of the dashboard's period selector."""
@@ -793,9 +789,7 @@ class AnalyticsRepository:
                 )
                 .label("rank"),
             )
-            .join(
-                Application, Application.id == ApplicationEvaluation.application_id
-            )
+            .join(Application, Application.id == ApplicationEvaluation.application_id)
             .where(Application.job_post_id.in_(post_ids))
             .subquery()
         )
@@ -853,9 +847,7 @@ class AnalyticsRepository:
                 Application.job_post_id,
                 func.count(func.distinct(Application.id)),
             )
-            .join(
-                AssessmentAttempt, AssessmentAttempt.application_id == Application.id
-            )
+            .join(AssessmentAttempt, AssessmentAttempt.application_id == Application.id)
             .where(
                 Application.job_post_id.in_(post_ids),
                 AssessmentAttempt.status != AttemptStatus.NOT_STARTED.value,
@@ -873,9 +865,9 @@ class AnalyticsRepository:
             # (prescreening, interview, denied, success, failed, or
             # disqualified) — a coarse "did anything happen yet" signal.
             screened = applied - statuses.get(ApplicationStatus.APPLIED.value, 0)
-            passed = statuses.get(
-                ApplicationStatus.INTERVIEW.value, 0
-            ) + statuses.get(ApplicationStatus.SUCCESS.value, 0)
+            passed = statuses.get(ApplicationStatus.INTERVIEW.value, 0) + statuses.get(
+                ApplicationStatus.SUCCESS.value, 0
+            )
             accepted = statuses.get(ApplicationStatus.SUCCESS.value, 0)
             rejected = (
                 statuses.get(ApplicationStatus.DENIED.value, 0)
@@ -946,9 +938,7 @@ class AnalyticsRepository:
         )
 
         with_engagement = [
-            dict(r, _value=r["engagement_rate"])
-            for r in reports
-            if r["applied"] > 0
+            dict(r, _value=r["engagement_rate"]) for r in reports if r["applied"] > 0
         ]
         top_engagement = _ranked(
             sorted(with_engagement, key=lambda r: r["_value"], reverse=True)[:5]
@@ -1052,9 +1042,7 @@ class AnalyticsRepository:
                     .where(JobPost.position_id == position_id)
                 )
             )
-        applicant_ids = (
-            (await self.db.execute(applicant_ids_query)).scalars().all()
-        )
+        applicant_ids = (await self.db.execute(applicant_ids_query)).scalars().all()
         if not applicant_ids:
             return []
 

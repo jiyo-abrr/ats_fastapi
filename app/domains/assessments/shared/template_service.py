@@ -28,8 +28,8 @@ from typing import Any, Generic, TypeVar
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.question_types import validate_question_config
 from app.core.unit_of_work import UnitOfWork
+from app.domains.assessments.shared.question_types import validate_question_config
 
 TemplateT = TypeVar("TemplateT")
 QuestionT = TypeVar("QuestionT")

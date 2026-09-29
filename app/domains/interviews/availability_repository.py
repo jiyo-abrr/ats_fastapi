@@ -11,14 +11,19 @@ tables.
 """
 
 import uuid
-from collections.abc import Sequence
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.applications.entities import Application as ApplicationEntity
 from app.domains.applications.models import Application
+from app.domains.applications.repository import ApplicationRepository
 from app.domains.auth.models import User
+from app.domains.company_addresses.entities import (
+    CompanyAddress as CompanyAddressEntity,
+)
 from app.domains.company_addresses.models import CompanyAddress
+from app.domains.company_addresses.repository import CompanyAddressRepository
 from app.domains.interviews import entities
 from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.models import (
@@ -129,14 +134,14 @@ class InterviewAvailabilityRepository:
 
     async def company_addresses_by_id(
         self, ids: set[uuid.UUID]
-    ) -> dict[uuid.UUID, CompanyAddress]:
+    ) -> dict[uuid.UUID, CompanyAddressEntity]:
         """Batch-resolve linked addresses for `_presets_out` — one query for
         every preset on the page, not one per row."""
         if not ids:
             return {}
         stmt = select(CompanyAddress).where(CompanyAddress.id.in_(ids))
         rows = (await self.db.execute(stmt)).scalars().all()
-        return {r.id: r for r in rows}
+        return {r.id: r for r in await CompanyAddressRepository(self.db).map_many(rows)}
 
     async def valid_company_address_ids(self, ids: set[uuid.UUID]) -> set[uuid.UUID]:
         if not ids:
@@ -262,10 +267,10 @@ class InterviewAvailabilityRepository:
 
     # -- staff / interviewers (cross-domain projections) -----------------
 
-    async def list_staff(self) -> Sequence[User]:
+    async def list_staff(self) -> list[entities.Interviewer]:
         """Every admin / HR account — the pool for a job post's interviewer
         list."""
-        return (
+        rows = (
             (
                 await self.db.execute(
                     select(User)
@@ -278,11 +283,27 @@ class InterviewAvailabilityRepository:
             .all()
         )
 
-    async def get_job_post(self, job_post_id: uuid.UUID) -> JobPost | None:
-        return await self.db.get(JobPost, job_post_id)
+        return [
+            entities.Interviewer(
+                id=r.id, first_name=r.first_name, last_name=r.last_name, email=r.email
+            )
+            for r in rows
+        ]
 
-    async def interviewers(self, job_post_id: uuid.UUID) -> Sequence[User]:
+    async def get_job_post(
+        self, job_post_id: uuid.UUID
+    ) -> entities.JobPostInterviewSettings | None:
+        row = await self.db.get(JobPost, job_post_id)
         return (
+            entities.JobPostInterviewSettings(
+                id=row.id, default_interview_mode=row.default_interview_mode
+            )
+            if row
+            else None
+        )
+
+    async def interviewers(self, job_post_id: uuid.UUID) -> list[entities.Interviewer]:
+        rows = (
             (
                 await self.db.execute(
                     select(User)
@@ -297,6 +318,13 @@ class InterviewAvailabilityRepository:
             .scalars()
             .all()
         )
+
+        return [
+            entities.Interviewer(
+                id=r.id, first_name=r.first_name, last_name=r.last_name, email=r.email
+            )
+            for r in rows
+        ]
 
     async def valid_user_ids(self, user_ids: list[uuid.UUID]) -> set[uuid.UUID]:
         return set(
@@ -324,19 +352,29 @@ class InterviewAvailabilityRepository:
 
     # -- slot generation (cross-domain projections) ----------------------
 
-    async def get_application(self, application_id: uuid.UUID) -> Application | None:
-        return await self.db.get(Application, application_id)
+    async def get_application(
+        self, application_id: uuid.UUID
+    ) -> ApplicationEntity | None:
+        return await ApplicationRepository(self.db).get_by_id(application_id)
 
     async def get_request_for_application(
         self, application_id: uuid.UUID
-    ) -> InterviewRequestModel | None:
-        return (
+    ) -> entities.RequestBookingSettings | None:
+        row = (
             await self.db.execute(
                 select(InterviewRequestModel).where(
                     InterviewRequestModel.application_id == application_id
                 )
             )
         ).scalar_one_or_none()
+
+        return (
+            entities.RequestBookingSettings(
+                id=row.id, duration_minutes=row.duration_minutes
+            )
+            if row
+            else None
+        )
 
     async def booked_intervals(
         self, exclude_request_id: uuid.UUID | None

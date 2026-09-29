@@ -16,10 +16,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import Row, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.applications.entities import Application as ApplicationEntity
 from app.domains.applications.enums import ApplicationStatus
 from app.domains.applications.models import Application
+from app.domains.applications.repository import ApplicationRepository
 from app.domains.auth.models import User
-from app.domains.company_addresses.models import CompanyAddress
+from app.domains.company_addresses.entities import (
+    CompanyAddress as CompanyAddressEntity,
+)
+from app.domains.company_addresses.repository import CompanyAddressRepository
 from app.domains.interviews import entities
 from app.domains.interviews.enums import INTERVIEW_RELEASED_APPLICATION_STATUSES
 from app.domains.interviews.models import InterviewRequest as InterviewRequestModel
@@ -66,13 +71,15 @@ class InterviewRepository:
     # -- application / company address (read-only, cross-domain — see module
     # docstring) --------------------------------------------------------
 
-    async def get_application(self, application_id: uuid.UUID) -> Application | None:
-        return await self.db.get(Application, application_id)
+    async def get_application(
+        self, application_id: uuid.UUID
+    ) -> ApplicationEntity | None:
+        return await ApplicationRepository(self.db).get_by_id(application_id)
 
     async def get_company_address(
         self, address_id: uuid.UUID
-    ) -> CompanyAddress | None:
-        return await self.db.get(CompanyAddress, address_id)
+    ) -> CompanyAddressEntity | None:
+        return await CompanyAddressRepository(self.db).get_by_id(address_id)
 
     # -- request + slots ---------------------------------------------------
 

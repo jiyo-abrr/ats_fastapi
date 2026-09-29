@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -26,22 +26,15 @@ async def test_locations_attaches_geocoded_coordinates():
         {"key": "Quezon City, Metro Manila", "count": 3},
         {"key": "Some Unresolvable Place", "count": 1},
     ]
-    db = AsyncMock()
-    service = AnalyticsService(repo, db)
-
-    with patch(
-        "app.domains.analytics.service.geocoding.geocode_many",
-        new=AsyncMock(
-            return_value={
-                "Quezon City, Metro Manila": (14.6760, 121.0437),
-                "Some Unresolvable Place": None,
-            }
-        ),
-    ) as mocked_geocode:
-        result = await service.locations(position_id=None)
-
-    mocked_geocode.assert_awaited_once_with(
-        db, ["Quezon City, Metro Manila", "Some Unresolvable Place"]
+    geocoding = AsyncMock()
+    geocoding.geocode_many.return_value = {
+        "Quezon City, Metro Manila": (14.6760, 121.0437),
+        "Some Unresolvable Place": None,
+    }
+    service = AnalyticsService(repo, geocoding)
+    result = await service.locations(position_id=None)
+    geocoding.geocode_many.assert_awaited_once_with(
+        ["Quezon City, Metro Manila", "Some Unresolvable Place"]
     )
     assert result == [
         {

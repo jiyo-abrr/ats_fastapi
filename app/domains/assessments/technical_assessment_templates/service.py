@@ -1,5 +1,5 @@
-from app.core.template_service import BaseTemplateService
 from app.core.unit_of_work import UnitOfWork
+from app.domains.assessments.shared.template_service import BaseTemplateService
 from app.domains.assessments.technical_assessment_templates import entities
 from app.domains.assessments.technical_assessment_templates.exceptions import (
     TechnicalAssessmentQuestionNotFoundError,

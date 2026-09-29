@@ -2,7 +2,39 @@
 
 Reviewed: 2026-09-17
 
-Scope: the current working tree, including existing uncommitted changes. This is a structure and maintainability review, not a complete security, performance, or production-readiness audit. No application code, configuration, migrations, or tests were changed for this review.
+Original review scope: the working tree on 2026-09-17, including existing uncommitted changes. The original review was read-only. The user subsequently authorized all fixes; the implementation status below supersedes the historical findings and verification further down. This is not a complete security, performance, or production-readiness audit.
+
+## Remediation status — 2026-09-17
+
+All eight findings have been addressed. Existing user changes were retained.
+
+| Finding | Implemented change | Verification |
+| --- | --- | --- |
+| R01 | `TransitionApplication` owns one commit for status, interview request, and booking deadline; participating services can stage without committing. Application reads explicitly reload server-generated timestamps before mapping. | Unit failure-path tests and HTTP/database tests cover success and failures at request provisioning, deadline assignment, and commit. |
+| R02 | Interview repositories return plain application/address entities and typed staff, job-setting, and request-setting projections. | Database tests verify detached dataclasses, alongside existing interview integration tests. |
+| R03 | Geocoding client, cache repository, and `GeocodingService` are separate; the service commits through a UoW. Cache insertion tolerates concurrent duplicates. Transient provider failures remain retryable. | Unit tests cover cached values, duplicate queries, definitive misses, transient failure/retry, and rollback. |
+| R04 | Auth/RBAC/evaluation read services return plain entities/results. Interview and evaluation-import validation lives in transport-independent `contracts.py`; API facades retain existing payload names. Time helpers moved to `interviews/time_utils.py`. | Existing service/schema tests, response serialization checks, and architecture checks. |
+| R05 | Architecture, README, and contributor guidance now describe the implemented workflows, contracts, cache writes, snapshots, and DAG. The earlier maintainability report is labeled historical. | Local documentation/link review. |
+| R06 | HTTP and worker exports share `PrepareEvaluationExport` and `EvaluationExportRepository`; authorization and limits are supplied by each entry point. Worker over-limit exports fail explicitly instead of silently truncating. | Shared workflow tests cover filters, missing resumes, count/byte limits, and missing jobs; database tests cover status and HR-assessed exclusions and verify both HTTP/worker ZIP contents. |
+| R07 | Template-service and question-validation modules moved from `core/` to `assessments/shared/`; imports and the question-validation test location were updated. | Assessment tests and lint. |
+| R08 | Added architecture tests for forbidden service imports, cross-domain service dependencies, entity/contract independence, and repository commits. They run in the existing CI unit suite. | `tests/unit/test_architecture.py`. |
+
+Formatting findings were also corrected. No new migration or dependency was needed
+for these fixes; the migrations already staged by the user remain intact.
+
+### Verification after remediation
+
+- Unit suite: **336 passed** (including architecture and response-contract checks).
+- PostgreSQL integration suite: **68 passed**, using a uniquely named disposable
+  database created for verification and removed afterward. Existing databases
+  were not reset.
+- Ruff lint and formatting: **passed**.
+- Existing unit-test dependency deprecation and JWT key-length warnings remain.
+- External storage/geocoding calls were mocked. Live queue delivery, Airflow
+  execution/cutover, and deployment were not exercised;
+  their runtime behavior is not certified by these checks.
+
+## Original review (historical)
 
 ## Overall assessment
 
@@ -102,7 +134,7 @@ Both paths select eligible applications, apply the HR-assessed exclusion, fetch 
 
 ### R07 — Low: `core/` contains assessment-specific business logic
 
-**Evidence:** [core/template_service.py](../app/core/template_service.py) implements assessment template CRUD and question authoring; [core/question_types.py](../app/core/question_types.py) defines assessment question types and answer-validation rules.
+**Evidence:** [core/template_service.py](../app/domains/assessments/shared/template_service.py) implements assessment template CRUD and question authoring; [core/question_types.py](../app/domains/assessments/shared/question_types.py) defines assessment question types and answer-validation rules.
 
 **Why it matters:** `core/` mixes application-wide infrastructure with logic shared only by the assessment subdomains. As features grow, this makes ownership less obvious.
 

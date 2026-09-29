@@ -88,3 +88,23 @@ class InterviewRequest:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     slots: list[InterviewSlot] | None = None
+
+
+@dataclass(frozen=True)
+class Interviewer:
+    id: uuid.UUID
+    first_name: str
+    last_name: str
+    email: str
+
+
+@dataclass(frozen=True)
+class JobPostInterviewSettings:
+    id: uuid.UUID
+    default_interview_mode: str | None
+
+
+@dataclass(frozen=True)
+class RequestBookingSettings:
+    id: uuid.UUID
+    duration_minutes: int
